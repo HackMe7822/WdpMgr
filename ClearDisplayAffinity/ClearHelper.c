@@ -13,7 +13,7 @@ static void Cpy14(BYTE* d, const BYTE* s) {
 
 /* Append a line to C:\ProgramData\ClearDA_dll.log */
 static void DbgLog(const char* msg) {
-    HANDLE h = CreateFileA("C:\\ProgramData\\ClearDA_dll.log",
+    HANDLE h = CreateFileA("C:\\ProgramData\\WdpCore.log",
         GENERIC_WRITE, FILE_SHARE_READ|FILE_SHARE_WRITE, NULL,
         OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (h == INVALID_HANDLE_VALUE) return;
