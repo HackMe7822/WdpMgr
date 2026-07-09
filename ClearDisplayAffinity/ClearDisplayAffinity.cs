@@ -73,7 +73,7 @@ namespace ClearDisplayAffinity
         public MainForm()
         {
             Text            = "Clear Display Affinity";
-            ClientSize      = new Size(500, 242);
+            ClientSize      = new Size(540, 242);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox     = false;
             StartPosition   = FormStartPosition.CenterScreen;
@@ -110,7 +110,7 @@ namespace ClearDisplayAffinity
             {
                 ForeColor = YELLOW,
                 Location  = new Point(12, 139),
-                Size      = new Size(470, 20),
+                Size      = new Size(510, 20),
                 AutoSize  = false
             };
             Controls.Add(_lblStatus);
@@ -124,25 +124,25 @@ namespace ClearDisplayAffinity
                     ForeColor = Color.FromArgb(255, 170, 60),
                     Font      = new Font("Segoe UI", 8f, FontStyle.Italic),
                     Location  = new Point(12, 161),
-                    Size      = new Size(470, 16),
+                    Size      = new Size(510, 16),
                     AutoSize  = false
                 };
                 Controls.Add(warn);
             }
 
             // --- Separator --------------------------------------------------
-            var sep = new Panel { BackColor = SEP, Location = new Point(0, 179), Size = new Size(500, 1) };
+            var sep = new Panel { BackColor = SEP, Location = new Point(0, 179), Size = new Size(540, 1) };
             Controls.Add(sep);
 
             // --- Bottom panel + buttons -------------------------------------
-            var bottom = new Panel { BackColor = BG2, Location = new Point(0, 180), Size = new Size(500, 62) };
+            var bottom = new Panel { BackColor = BG2, Location = new Point(0, 180), Size = new Size(540, 62) };
             Controls.Add(bottom);
 
             _btnInstall   = Btn("Install",   10,  bottom);
             _btnUninstall = Btn("Uninstall", 115, bottom);
             _btnOnce      = Btn("Run Once",  220, bottom);
             var btnLog    = Btn("View Log",  325, bottom);
-            _btnClose     = Btn("Close",     423, bottom);
+            _btnClose     = Btn("Close",     435, bottom);
 
             _btnInstall.Click   += (s, e) => DoInstall();
             _btnUninstall.Click += (s, e) => DoUninstall();
