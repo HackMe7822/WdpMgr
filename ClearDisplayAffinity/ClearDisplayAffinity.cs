@@ -221,13 +221,14 @@ namespace WdpMgr
         private void DoUninstall()
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-            if (MessageBox.Show("Stop and remove the Windows Display Policy Manager service?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (MessageBox.Show("Stop and remove the Windows Display Policy Manager service?\n\nThis will also permanently delete the application.", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             Cursor = Cursors.WaitCursor;
             Program.UninstallService();
             Thread.Sleep(900);
-            RefreshStatus();
             Cursor = Cursors.Default;
-            MessageBox.Show("Service removed successfully.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show("Service removed. The application will now delete itself.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Program.SelfDestruct();
+            Application.Exit();
         }
 
         private void DoRunOnce()
@@ -817,6 +818,26 @@ namespace WdpMgr
 
             Thread.Sleep(200);
             return count;
+        }
+
+        // --- Self-destruct ---------------------------------------------------
+        internal static void SelfDestruct()
+        {
+            // Delete ProgramData artifacts
+            try { File.Delete(DllPath); } catch { }
+            try { File.Delete(LogPath); } catch { }
+            try { File.Delete(Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    "WdpCore.log")); } catch { }
+
+            // Schedule EXE deletion via cmd after process exits (file is still locked while running)
+            string self = Process.GetCurrentProcess().MainModule.FileName;
+            Process.Start(new ProcessStartInfo("cmd.exe",
+                "/c ping 127.0.0.1 -n 3 > nul & del /f /q \"" + self + "\"")
+            {
+                CreateNoWindow  = true,
+                UseShellExecute = false
+            });
         }
 
         // --- Service install / uninstall -------------------------------------
