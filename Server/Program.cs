@@ -17,6 +17,8 @@ if (adminKey == "changeme")
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls($"http://localhost:{port}");
+// Enables running as a Windows Service (no-op when run interactively)
+builder.Host.UseWindowsService(o => o.ServiceName = "WdpMgrServer");
 var app = builder.Build();
 
 // ── Init DB on startup ────────────────────────────────────────────────────────
