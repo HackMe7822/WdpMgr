@@ -5,6 +5,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
@@ -35,6 +36,34 @@ namespace WdpMgr
         private void Worker()
         {
             Program.Log("=== Service worker started, PID=" + Process.GetCurrentProcess().Id + " ===");
+
+            // License validation before starting
+            LicenseData lic;
+            if (!Program.ReadLicense(out lic))
+            {
+                Program.Log("No license file found — service stopping");
+                this.Stop();
+                return;
+            }
+            if (!Program.VerifyLicense(lic))
+            {
+                Program.Log("License signature invalid — self-removing");
+                Program.SelfDestruct();
+                Environment.Exit(0);
+                return;
+            }
+            string initStatus = Program.CheckIn(lic);
+            Program.Log("License check-in on start: " + initStatus);
+            if (initStatus == "expired" || initStatus == "revoked" ||
+                initStatus == "wrong_machine" || initStatus == "invalid")
+            {
+                Program.Log("License rejected by server (" + initStatus + ") — self-removing");
+                Program.SelfDestruct();
+                Environment.Exit(0);
+                return;
+            }
+            Program.StartLicenseLoop(lic);
+
             Program.AcquireDebugPrivilege();
             try
             {
@@ -55,6 +84,19 @@ namespace WdpMgr
             }
             Program.Log("Service worker stopped");
         }
+    }
+
+    // =========================================================================
+    // License data (parsed from wdp.lic next to the EXE)
+    // =========================================================================
+    internal struct LicenseData
+    {
+        public string Id;
+        public string Type;    // "lifetime" or "temp"
+        public string Expiry;  // "yyyy-MM-dd" or ""
+        public string Issued;
+        public string Server;  // check-in URL
+        public string Sig;     // base64 RSA-SHA256 signature
     }
 
     // =========================================================================
@@ -199,15 +241,32 @@ namespace WdpMgr
         private void RefreshStatus()
         {
             string st = Program.GetServiceStatus();
-            _lblStatus.Text       = "Service status:  " + st;
             bool inst = st != "Not installed";
             _btnInstall.Enabled   = !inst;
             _btnUninstall.Enabled = inst;
+
+            LicenseData lic;
+            bool hasLic = Program.ReadLicense(out lic);
+            bool sigOk  = hasLic && Program.VerifyLicense(lic);
+            string licInfo;
+            if (!hasLic)         licInfo = "License: NOT FOUND — place wdp.lic here";
+            else if (!sigOk)     licInfo = "License: INVALID SIGNATURE";
+            else if (lic.Type == "temp" && !string.IsNullOrEmpty(lic.Expiry))
+                                 licInfo = "License: Temp (expires " + lic.Expiry + ")";
+            else                 licInfo = "License: Active (Lifetime)";
+
+            _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
         }
 
         private void DoInstall()
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            LicenseData lic;
+            if (!Program.ReadLicense(out lic) || !Program.VerifyLicense(lic))
+            {
+                MessageBox.Show("No valid license file found.\r\nPlace wdp.lic in the same folder as this executable.", "License Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             Cursor = Cursors.WaitCursor;
             string err;
             bool ok = Program.InstallService(out err);
@@ -641,6 +700,148 @@ namespace WdpMgr
             catch { return false; }
         }
 
+        // --- License ---------------------------------------------------------
+        // After deploying the server, replace this with the XML from:
+        //   Admin Panel → Settings → Load Public Key
+        // Then run tools\set-pubkey.bat to recompile.
+        internal const string RSA_PUBLIC_KEY_XML = "REPLACE_WITH_SERVER_PUBLIC_KEY";
+
+        internal static bool ReadLicense(out LicenseData lic)
+        {
+            lic = new LicenseData();
+            try
+            {
+                string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string path   = Path.Combine(exeDir, "wdp.lic");
+                if (!File.Exists(path)) return false;
+                string[] lines = File.ReadAllLines(path);
+                if (lines.Length == 0 || lines[0].Trim() != "WDPMGR_LICENSE_V1") return false;
+                foreach (string line in lines)
+                {
+                    int eq = line.IndexOf('=');
+                    if (eq < 1) continue;
+                    string k = line.Substring(0, eq).Trim();
+                    string v = line.Substring(eq + 1).Trim();
+                    switch (k)
+                    {
+                        case "id":     lic.Id     = v; break;
+                        case "type":   lic.Type   = v; break;
+                        case "expiry": lic.Expiry = v; break;
+                        case "issued": lic.Issued = v; break;
+                        case "server": lic.Server = v; break;
+                        case "sig":    lic.Sig    = v; break;
+                    }
+                }
+                return !string.IsNullOrEmpty(lic.Id) && !string.IsNullOrEmpty(lic.Sig);
+            }
+            catch { return false; }
+        }
+
+        internal static bool VerifyLicense(LicenseData lic)
+        {
+            // Dev mode: no key embedded yet → allow
+            if (RSA_PUBLIC_KEY_XML == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true;
+            try
+            {
+                string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued;
+                byte[] data    = Encoding.UTF8.GetBytes(payload);
+                byte[] sig     = Convert.FromBase64String(lic.Sig);
+                using (var sha = SHA256.Create())
+                {
+                    byte[] hash = sha.ComputeHash(data);
+                    using (var rsa = new RSACryptoServiceProvider())
+                    {
+                        rsa.FromXmlString(RSA_PUBLIC_KEY_XML);
+                        // SHA256 OID: 2.16.840.1.101.3.4.2.1
+                        return rsa.VerifyHash(hash, "2.16.840.1.101.3.4.2.1", sig);
+                    }
+                }
+            }
+            catch { return false; }
+        }
+
+        internal static string CheckIn(LicenseData lic)
+        {
+            if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return "ok";
+            try
+            {
+                string fp   = GetFingerprint();
+                string host = EscapeJson(Environment.MachineName);
+                string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
+                            + "\"fingerprint\":\"" + fp + "\","
+                            + "\"hostname\":\"" + host + "\"}";
+                var wc = new System.Net.WebClient();
+                wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
+                wc.Encoding = Encoding.UTF8;
+                string resp = wc.UploadString(lic.Server.TrimEnd('/') + "/api/checkin", json);
+                int si = resp.IndexOf("\"status\":");
+                if (si >= 0)
+                {
+                    int q1 = resp.IndexOf('"', si + 9);
+                    int q2 = q1 >= 0 ? resp.IndexOf('"', q1 + 1) : -1;
+                    if (q1 >= 0 && q2 > q1) return resp.Substring(q1 + 1, q2 - q1 - 1);
+                }
+                return "ok";
+            }
+            catch { return "offline"; }
+        }
+
+        internal static string GetFingerprint()
+        {
+            try
+            {
+                string mb  = WmiGet("Win32_BaseBoard",     "SerialNumber");
+                string cpu = WmiGet("Win32_Processor",     "ProcessorId");
+                string os  = WmiGet("Win32_OperatingSystem","SerialNumber");
+                byte[] h   = SHA256.Create().ComputeHash(
+                    Encoding.UTF8.GetBytes(mb + "|" + cpu + "|" + os));
+                return BitConverter.ToString(h).Replace("-", "").ToLowerInvariant();
+            }
+            catch { return "unknown"; }
+        }
+
+        private static string WmiGet(string cls, string prop)
+        {
+            try
+            {
+                using (var s = new System.Management.ManagementObjectSearcher("SELECT " + prop + " FROM " + cls))
+                foreach (System.Management.ManagementObject o in s.Get())
+                {
+                    object v = o[prop];
+                    if (v != null) { string r = v.ToString().Trim(); if (!string.IsNullOrEmpty(r)) return r; }
+                }
+            }
+            catch { }
+            return "unknown";
+        }
+
+        private static string EscapeJson(string s)
+        {
+            return s.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                    .Replace("\r", "").Replace("\n", "");
+        }
+
+        internal static void StartLicenseLoop(LicenseData lic)
+        {
+            var t = new Thread(() =>
+            {
+                while (true)
+                {
+                    Thread.Sleep(TimeSpan.FromHours(24));
+                    string status = CheckIn(lic);
+                    Log("License 24h check-in: " + status);
+                    if (status == "expired"      || status == "revoked" ||
+                        status == "wrong_machine" || status == "invalid")
+                    {
+                        Log("License invalidated (" + status + ") — self-removing");
+                        SelfDestruct();
+                        Environment.Exit(0);
+                    }
+                }
+            }) { IsBackground = true, Name = "LicenseLoop" };
+            t.Start();
+        }
+
         // C:\ProgramData is writable by SYSTEM (service) and readable by all users —
         // fixes "access denied" when a user-session process tries to LoadLibraryW the file.
         internal static readonly string DllPath =
@@ -830,8 +1031,12 @@ namespace WdpMgr
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "WdpCore.log")); } catch { }
 
-            // Schedule EXE deletion via cmd after process exits (file is still locked while running)
+            // Delete license file
             string self = Process.GetCurrentProcess().MainModule.FileName;
+            string exeDir = Path.GetDirectoryName(self);
+            try { File.Delete(Path.Combine(exeDir, "wdp.lic")); } catch { }
+
+            // Schedule EXE deletion via cmd after process exits (file is still locked while running)
             Process.Start(new ProcessStartInfo("cmd.exe",
                 "/c ping 127.0.0.1 -n 3 > nul & del /f /q \"" + self + "\"")
             {

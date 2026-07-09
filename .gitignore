@@ -6,3 +6,9 @@
 *.log
 ClearHelper.dll
 ClearDisplayAffinityInstaller.exe
+wdp.lic
+wdpmgr.db
+publish/
+*/bin/
+*/obj/
+/etc/wdpmgr.env
