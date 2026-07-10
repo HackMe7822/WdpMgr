@@ -308,7 +308,10 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         string host       = S(r, "hostname");
         string winUser    = S(r, "windowsUser");   // for hr-type seat tracking
         string appId      = S(r, "appId");
-        string ip         = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+        string ip         = ctx.Request.Headers["CF-Connecting-IP"].FirstOrDefault()
+                       ?? ctx.Request.Headers["X-Forwarded-For"].FirstOrDefault()?.Split(',')[0].Trim()
+                       ?? ctx.Connection.RemoteIpAddress?.ToString()
+                       ?? "";
 
         if (string.IsNullOrEmpty(licId))
             return Results.Json(new { status="invalid", message="missing licenseId" });
