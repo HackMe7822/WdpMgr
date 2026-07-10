@@ -26,7 +26,16 @@ DB.Init(dbPath, firstUser, firstPass);
 Console.WriteLine($"[INFO] DB: {Path.GetFullPath(dbPath)}  |  http://localhost:{port}");
 
 app.UseDefaultFiles();
-app.UseStaticFiles();
+app.UseStaticFiles(new StaticFileOptions {
+    OnPrepareResponse = ctx => {
+        // JS/CSS/HTML: no caching so updates are always picked up
+        var ext = Path.GetExtension(ctx.File.Name).ToLowerInvariant();
+        if (ext is ".js" or ".css" or ".html") {
+            ctx.Context.Response.Headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+            ctx.Context.Response.Headers["Pragma"]        = "no-cache";
+        }
+    }
+});
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 bool AdminOk(HttpContext ctx) {
