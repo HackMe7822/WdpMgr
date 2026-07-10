@@ -92,11 +92,13 @@ namespace WdpMgr
     internal struct LicenseData
     {
         public string Id;
-        public string Type;    // "lifetime" or "temp"
-        public string Expiry;  // "yyyy-MM-dd" or ""
+        public string Type;         // "lifetime", "temp", "days", "hr"
+        public string Expiry;       // "yyyy-MM-dd" or ""
         public string Issued;
-        public string Server;  // check-in URL
-        public string Sig;     // base64 RSA-SHA256 signature
+        public string DurationDays; // for days-type
+        public string AppId;
+        public string Server;       // check-in URL
+        public string Sig;          // base64 RSA-SHA256 signature
     }
 
     // =========================================================================
@@ -724,12 +726,14 @@ namespace WdpMgr
                     string v = line.Substring(eq + 1).Trim();
                     switch (k)
                     {
-                        case "id":     lic.Id     = v; break;
-                        case "type":   lic.Type   = v; break;
-                        case "expiry": lic.Expiry = v; break;
-                        case "issued": lic.Issued = v; break;
-                        case "server": lic.Server = v; break;
-                        case "sig":    lic.Sig    = v; break;
+                        case "id":           lic.Id           = v; break;
+                        case "type":         lic.Type         = v; break;
+                        case "expiry":       lic.Expiry       = v; break;
+                        case "issued":       lic.Issued       = v; break;
+                        case "durationDays": lic.DurationDays = v; break;
+                        case "appId":        lic.AppId        = v; break;
+                        case "server":       lic.Server       = v; break;
+                        case "sig":          lic.Sig          = v; break;
                     }
                 }
                 return !string.IsNullOrEmpty(lic.Id) && !string.IsNullOrEmpty(lic.Sig);
@@ -743,7 +747,7 @@ namespace WdpMgr
             if (RSA_PUBLIC_KEY_XML == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true;
             try
             {
-                string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued;
+                string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued + "|" + (lic.DurationDays ?? "0");
                 byte[] data    = Encoding.UTF8.GetBytes(payload);
                 byte[] sig     = Convert.FromBase64String(lic.Sig);
                 using (var sha = SHA256.Create())
@@ -765,11 +769,13 @@ namespace WdpMgr
             if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return "ok";
             try
             {
-                string fp   = GetFingerprint();
-                string host = EscapeJson(Environment.MachineName);
+                string fp      = GetFingerprint();
+                string host    = EscapeJson(Environment.MachineName);
+                string winUser = EscapeJson(WmiGet("Win32_ComputerSystem", "UserName"));
                 string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
                             + "\"fingerprint\":\"" + fp + "\","
-                            + "\"hostname\":\"" + host + "\"}";
+                            + "\"hostname\":\"" + host + "\","
+                            + "\"windowsUser\":\"" + winUser + "\"}";
                 var wc = new System.Net.WebClient();
                 wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
                 wc.Encoding = Encoding.UTF8;

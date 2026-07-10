@@ -1,5 +1,5 @@
-// WdpMgr License Server - ASP.NET Core 8 minimal API
-// SQLite auto-created on first run, RSA-2048 key pair generated on first start.
+// WdpMgr License Server — ASP.NET Core 8
+// License types: lifetime | temp (fixed date) | days (N days from activation) | hr (per-seat)
 
 using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
@@ -8,175 +8,260 @@ using System.Text.Json;
 using System.Xml.Linq;
 
 // ── Config ────────────────────────────────────────────────────────────────────
-string adminKey = Environment.GetEnvironmentVariable("WDPMGR_ADMIN_KEY") ?? "changeme";
-string dbPath   = Environment.GetEnvironmentVariable("WDPMGR_DB_PATH")   ?? "wdpmgr.db";
-int    port     = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var pp) ? pp : 5000;
+string masterKey  = Env("WDPMGR_ADMIN_KEY", "changeme");
+string dbPath     = Env("WDPMGR_DB_PATH",   "wdpmgr.db");
+int    port       = int.TryParse(Env("PORT","5000"), out var _p) ? _p : 5000;
+string firstUser  = Env("WDPMGR_FIRST_USER", "");
+string firstPass  = Env("WDPMGR_FIRST_PASS", "");
 
-if (adminKey == "changeme")
-    Console.WriteLine("[WARN] Using default admin key — set WDPMGR_ADMIN_KEY environment variable!");
+if (masterKey == "changeme") Console.WriteLine("[WARN] Set WDPMGR_ADMIN_KEY environment variable!");
 
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls($"http://localhost:{port}");
-// Enables running as a Windows Service (no-op when run interactively)
 builder.Host.UseWindowsService(o => o.ServiceName = "WdpMgrServer");
 var app = builder.Build();
 
-// ── Init DB on startup ────────────────────────────────────────────────────────
-DB.Init(dbPath);
-Console.WriteLine($"[INFO] DB ready: {Path.GetFullPath(dbPath)}");
-Console.WriteLine($"[INFO] Listening on http://localhost:{port}");
+// ── DB init ───────────────────────────────────────────────────────────────────
+DB.Init(dbPath, firstUser, firstPass);
+Console.WriteLine($"[INFO] DB: {Path.GetFullPath(dbPath)}  |  http://localhost:{port}");
 
-// ── Serve admin panel ─────────────────────────────────────────────────────────
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-// ── Auth helper ───────────────────────────────────────────────────────────────
-bool AdminOk(HttpContext ctx) =>
-    ctx.Request.Headers.TryGetValue("X-Admin-Key", out var v) && v.ToString() == adminKey;
-
+// ── Auth ──────────────────────────────────────────────────────────────────────
+bool AdminOk(HttpContext ctx) {
+    if (!ctx.Request.Headers.TryGetValue("X-Admin-Key", out var v)) return false;
+    string key = v.ToString();
+    if (key == masterKey) return true;
+    using var db = DB.Open(dbPath);
+    return DB.ApiKeyValid(db, key);
+}
 IResult Unauth() => Results.Json(new { error = "Unauthorized" }, statusCode: 401);
 
-// ── Admin: stats ──────────────────────────────────────────────────────────────
-app.MapGet("/api/admin/stats", (HttpContext ctx) =>
-{
+// ── Admin login (username + password → api key) ───────────────────────────────
+app.MapPost("/api/admin/login", async (HttpContext ctx) => {
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string username = S(doc.RootElement, "username");
+    string password = S(doc.RootElement, "password");
+    using var db    = DB.Open(dbPath);
+    var key = DB.Login(db, username, password);
+    if (key == null) return Results.Json(new { error = "Invalid credentials" }, statusCode: 401);
+    return Results.Json(new { apiKey = key });
+});
+
+// ── Admin users ───────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/users", (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    return Results.Json(DB.GetAdminUsers(db));
+});
+app.MapPost("/api/admin/users", async (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string username = S(doc.RootElement, "username");
+    string password = S(doc.RootElement, "password");
+    string role     = S(doc.RootElement, "role", "admin");
+    if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
+        return Results.Json(new { error = "username and password required" }, statusCode: 400);
+    using var db = DB.Open(dbPath);
+    if (DB.UserExists(db, username))
+        return Results.Json(new { error = "username already exists" }, statusCode: 409);
+    string id     = Guid.NewGuid().ToString();
+    string apiKey = Guid.NewGuid().ToString("N");
+    DB.CreateAdminUser(db, id, username, password, role, apiKey);
+    return Results.Json(new { id, username, role, apiKey });
+});
+app.MapDelete("/api/admin/users/{id}", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.DeleteAdminUser(db, id);
+    return Results.Json(new { ok = true });
+});
+app.MapPost("/api/admin/users/{id}/reset-key", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db  = DB.Open(dbPath);
+    string newKey = Guid.NewGuid().ToString("N");
+    DB.ResetApiKey(db, id, newKey);
+    return Results.Json(new { apiKey = newKey });
+});
+
+// ── Apps management ───────────────────────────────────────────────────────────
+app.MapGet("/api/admin/apps", (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    return Results.Json(DB.GetApps(db));
+});
+app.MapPost("/api/admin/apps", async (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string name = S(doc.RootElement, "name");
+    string desc = S(doc.RootElement, "description");
+    if (string.IsNullOrWhiteSpace(name))
+        return Results.Json(new { error = "name required" }, statusCode: 400);
+    string id = Guid.NewGuid().ToString();
+    using var db = DB.Open(dbPath);
+    DB.CreateApp(db, id, name, desc);
+    return Results.Json(new { id, name, description = desc });
+});
+app.MapDelete("/api/admin/apps/{id}", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.DeleteApp(db, id);
+    return Results.Json(new { ok = true });
+});
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/stats", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     return Results.Json(DB.GetStats(db));
 });
 
-// ── Admin: list licenses ──────────────────────────────────────────────────────
-app.MapGet("/api/admin/licenses", (HttpContext ctx) =>
-{
+// ── Licenses ──────────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/licenses", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     return Results.Json(DB.GetLicenses(db));
 });
-
-// ── Admin: create license ──────────────────────────────────────────────────────
-app.MapPost("/api/admin/licenses", async (HttpContext ctx) =>
-{
+app.MapPost("/api/admin/licenses", async (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
-    var r = doc.RootElement;
-    string label  = S(r, "label");
-    string type   = S(r, "type", "lifetime");
-    string expiry = S(r, "expiry");
-    string notes  = S(r, "notes");
-    int maxAct    = r.TryGetProperty("maxActivations", out var ma) && ma.TryGetInt32(out var mi) ? mi : 1;
+    var r          = doc.RootElement;
+    string label   = S(r, "label");
+    string type    = S(r, "type", "lifetime");   // lifetime|temp|days|hr
+    string expiry  = S(r, "expiry");             // for temp
+    string notes   = S(r, "notes");
+    string appId   = S(r, "appId");
+    int maxAct     = I(r, "maxActivations", 1);  // machines (or seats for hr)
+    int durDays    = I(r, "durationDays", 0);    // for days type
     if (string.IsNullOrWhiteSpace(label))
-        return Results.Json(new { error = "label is required" }, statusCode: 400);
-    if (type != "lifetime" && type != "temp")
-        return Results.Json(new { error = "type must be 'lifetime' or 'temp'" }, statusCode: 400);
-
+        return Results.Json(new { error = "label required" }, statusCode: 400);
+    if (!new[]{"lifetime","temp","days","hr"}.Contains(type))
+        return Results.Json(new { error = "type must be lifetime|temp|days|hr" }, statusCode: 400);
+    if (type == "temp" && string.IsNullOrWhiteSpace(expiry))
+        return Results.Json(new { error = "expiry required for temp license" }, statusCode: 400);
+    if (type == "days" && durDays < 1)
+        return Results.Json(new { error = "durationDays >= 1 required for days license" }, statusCode: 400);
     string id     = Guid.NewGuid().ToString();
     string issued = DateTime.UtcNow.ToString("yyyy-MM-dd");
     using var db  = DB.Open(dbPath);
-    DB.CreateLicense(db, id, label, type, expiry, issued, maxAct, notes);
-    return Results.Json(new { id, label, type, expiry, issued, maxActivations = maxAct, notes, revoked = false });
+    DB.CreateLicense(db, id, label, type, expiry, issued, maxAct, durDays, appId, notes);
+    return Results.Json(new { id, label, type, expiry, issued, maxActivations=maxAct, durationDays=durDays, appId, notes, revoked=false });
 });
-
-// ── Admin: revoke license ──────────────────────────────────────────────────────
-app.MapDelete("/api/admin/licenses/{id}", (HttpContext ctx, string id) =>
-{
+app.MapDelete("/api/admin/licenses/{id}", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
-    if (DB.GetLicenseById(db, id) == null)
-        return Results.Json(new { error = "not found" }, statusCode: 404);
     DB.RevokeLicense(db, id);
     return Results.Json(new { ok = true });
 });
 
-// ── Admin: list machines ───────────────────────────────────────────────────────
-app.MapGet("/api/admin/machines", (HttpContext ctx) =>
-{
+// ── Machines ──────────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/machines", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     return Results.Json(DB.GetMachines(db));
 });
-
-// ── Admin: revoke machine ──────────────────────────────────────────────────────
-app.MapDelete("/api/admin/machines/{id}", (HttpContext ctx, string id) =>
-{
+app.MapDelete("/api/admin/machines/{id}", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     DB.RevokeMachine(db, id);
     return Results.Json(new { ok = true });
 });
 
-// ── Admin: download .lic file ──────────────────────────────────────────────────
-app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) =>
-{
+// ── Download .lic ─────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
-    using var db  = DB.Open(dbPath);
+    using var db = DB.Open(dbPath);
     var lic = DB.GetLicenseById(db, id);
     if (lic == null) return Results.Json(new { error = "not found" }, statusCode: 404);
-    if (lic.Revoked) return Results.Json(new { error = "license is revoked" }, statusCode: 400);
+    if (lic.Revoked) return Results.Json(new { error = "revoked" }, statusCode: 400);
     string serverUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
     string content   = RsaSvc.GenerateLicFile(db, lic, serverUrl);
     ctx.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"wdp.lic\"");
     return Results.Content(content, "text/plain");
 });
 
-// ── Admin: get RSA public key (XML, .NET 4.0 compatible) ──────────────────────
-app.MapGet("/api/admin/publickey", (HttpContext ctx) =>
-{
+// ── Public key ────────────────────────────────────────────────────────────────
+app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     return Results.Json(new { publicKeyXml = RsaSvc.GetPublicKeyXml(db) });
 });
 
-// ── Client: check-in ──────────────────────────────────────────────────────────
-app.MapPost("/api/checkin", async (HttpContext ctx) =>
-{
-    try
-    {
-        using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
-        var r = doc.RootElement;
-        string licId = S(r, "licenseId");
-        string fp    = S(r, "fingerprint");
-        string host  = S(r, "hostname");
-        string ip    = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
+// ── Client check-in ───────────────────────────────────────────────────────────
+app.MapPost("/api/checkin", async (HttpContext ctx) => {
+    try {
+        using var doc     = await JsonDocument.ParseAsync(ctx.Request.Body);
+        var r             = doc.RootElement;
+        string licId      = S(r, "licenseId");
+        string fp         = S(r, "fingerprint");
+        string host       = S(r, "hostname");
+        string winUser    = S(r, "windowsUser");   // for hr-type seat tracking
+        string appId      = S(r, "appId");
+        string ip         = ctx.Connection.RemoteIpAddress?.ToString() ?? "";
 
         if (string.IsNullOrEmpty(licId))
-            return Results.Json(new { status = "invalid", message = "missing licenseId" });
+            return Results.Json(new { status="invalid", message="missing licenseId" });
 
         using var db = DB.Open(dbPath);
         var lic = DB.GetLicenseById(db, licId);
-        if (lic == null) return Results.Json(new { status = "invalid",  message = "unknown license" });
-        if (lic.Revoked) return Results.Json(new { status = "revoked" });
-        if (lic.IsExpired()) return Results.Json(new { status = "expired" });
+        if (lic == null) return Results.Json(new { status="invalid",  message="unknown license" });
+        if (lic.Revoked) return Results.Json(new { status="revoked" });
 
-        var machine = DB.GetMachineByLicAndFp(db, licId, fp);
-        if (machine == null)
-        {
+        // Type-specific expiry
+        if (lic.Type == "temp" && !string.IsNullOrEmpty(lic.Expiry))
+            if (DateTime.TryParse(lic.Expiry, out var ed) && ed.Date < DateTime.UtcNow.Date)
+                return Results.Json(new { status="expired" });
+
+        if (lic.Type == "days") {
+            if (!string.IsNullOrEmpty(lic.ActivatedAt)) {
+                if (DateTime.TryParse(lic.ActivatedAt, out var ad)) {
+                    if (DateTime.UtcNow.Date > ad.Date.AddDays(lic.DurationDays))
+                        return Results.Json(new { status="expired" });
+                }
+            }
+        }
+
+        // App-scope check
+        if (!string.IsNullOrEmpty(lic.AppId) && !string.IsNullOrEmpty(appId) && lic.AppId != appId)
+            return Results.Json(new { status="invalid", message="app mismatch" });
+
+        // HR type: seat key = fingerprint+windowsUser
+        string seatKey = lic.Type == "hr" ? $"{fp}|{winUser}" : fp;
+
+        var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
+        if (machine == null) {
             int cur = DB.GetActivationCount(db, licId);
             if (cur >= lic.MaxActivations)
-                return Results.Json(new { status = "wrong_machine", message = "max activations reached" });
-            DB.CreateMachine(db, Guid.NewGuid().ToString(), licId, fp, host, ip);
-        }
-        else
-        {
-            if (machine.Status == "revoked")
-                return Results.Json(new { status = "revoked" });
-            if (!string.IsNullOrEmpty(machine.Fingerprint) && machine.Fingerprint != fp)
-                return Results.Json(new { status = "wrong_machine" });
+                return Results.Json(new { status="wrong_machine", message="max activations reached" });
+            // First activation of a days-license: record activated_at
+            if (lic.Type == "days" && string.IsNullOrEmpty(lic.ActivatedAt))
+                DB.SetActivatedAt(db, licId, DateTime.UtcNow.ToString("yyyy-MM-dd"));
+            DB.CreateMachine(db, Guid.NewGuid().ToString(), licId, seatKey, host, winUser, ip);
+        } else {
+            if (machine.Status == "revoked") return Results.Json(new { status="revoked" });
             DB.UpdateMachineCheckin(db, machine.Id, host, ip);
         }
 
-        return Results.Json(new { status = "ok" });
+        // Return remaining days for days-type
+        object extra = new { };
+        if (lic.Type == "days" && !string.IsNullOrEmpty(lic.ActivatedAt) && DateTime.TryParse(lic.ActivatedAt, out var act))
+            extra = new { daysRemaining = (int)(act.Date.AddDays(lic.DurationDays) - DateTime.UtcNow.Date).TotalDays };
+
+        return Results.Json(new { status="ok", licenseType=lic.Type, extra });
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[ERROR] checkin: {ex.Message}");
-        return Results.Json(new { status = "invalid" }, statusCode: 400);
+    catch (Exception ex) {
+        Console.WriteLine($"[ERR] checkin: {ex.Message}");
+        return Results.Json(new { status="invalid" }, statusCode: 400);
     }
 });
 
 app.Run();
 
-// ── JSON helper ───────────────────────────────────────────────────────────────
-static string S(JsonElement e, string key, string def = "") =>
-    e.TryGetProperty(key, out var v) ? v.GetString() ?? def : def;
+// ── Helpers ───────────────────────────────────────────────────────────────────
+static string S(JsonElement e, string k, string d = "") => e.TryGetProperty(k, out var v) ? v.GetString() ?? d : d;
+static int    I(JsonElement e, string k, int d = 0)     => e.TryGetProperty(k, out var v) && v.TryGetInt32(out var i) ? i : d;
+static string Env(string k, string d = "")              => System.Environment.GetEnvironmentVariable(k) ?? d;
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -184,225 +269,333 @@ static string S(JsonElement e, string key, string def = "") =>
 // ═══════════════════════════════════════════════════════════════════════════════
 static class DB
 {
-    public static SqliteConnection Open(string path)
-    {
-        var conn = new SqliteConnection($"Data Source={path}");
-        conn.Open();
-        return conn;
+    public static SqliteConnection Open(string path) {
+        var c = new SqliteConnection($"Data Source={path}"); c.Open(); return c;
     }
 
-    public static void Init(string path)
-    {
+    public static void Init(string path, string firstUser, string firstPass) {
         using var db = Open(path);
+        // Core tables
         Exec(db, @"
             CREATE TABLE IF NOT EXISTS rsa_keys (
-                id          INTEGER PRIMARY KEY,
-                private_key TEXT NOT NULL,
-                public_key  TEXT NOT NULL
+                id INTEGER PRIMARY KEY, private_key TEXT NOT NULL, public_key TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL, api_key TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL DEFAULT 'admin',
+                created_at TEXT NOT NULL, last_login TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS apps (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS licenses (
-                id              TEXT PRIMARY KEY,
-                label           TEXT NOT NULL,
-                type            TEXT NOT NULL DEFAULT 'lifetime',
-                expiry          TEXT NOT NULL DEFAULT '',
-                issued          TEXT NOT NULL,
-                revoked         INTEGER NOT NULL DEFAULT 0,
+                id TEXT PRIMARY KEY, label TEXT NOT NULL,
+                type TEXT NOT NULL DEFAULT 'lifetime',
+                expiry TEXT NOT NULL DEFAULT '',
+                issued TEXT NOT NULL,
+                revoked INTEGER NOT NULL DEFAULT 0,
                 max_activations INTEGER NOT NULL DEFAULT 1,
-                notes           TEXT NOT NULL DEFAULT ''
+                duration_days INTEGER NOT NULL DEFAULT 0,
+                activated_at TEXT NOT NULL DEFAULT '',
+                app_id TEXT NOT NULL DEFAULT '',
+                notes TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS machines (
-                id          TEXT PRIMARY KEY,
-                license_id  TEXT NOT NULL,
-                fingerprint TEXT NOT NULL DEFAULT '',
-                hostname    TEXT NOT NULL DEFAULT '',
-                ip_address  TEXT NOT NULL DEFAULT '',
-                first_seen  TEXT NOT NULL,
-                last_seen   TEXT NOT NULL DEFAULT '',
-                status      TEXT NOT NULL DEFAULT 'active'
+                id TEXT PRIMARY KEY,
+                license_id TEXT NOT NULL,
+                seat_key TEXT NOT NULL DEFAULT '',
+                hostname TEXT NOT NULL DEFAULT '',
+                windows_user TEXT NOT NULL DEFAULT '',
+                ip_address TEXT NOT NULL DEFAULT '',
+                first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active'
             );
         ");
+        // Add columns if upgrading from older schema
+        foreach (var col in new[]{
+            ("licenses","duration_days","INTEGER NOT NULL DEFAULT 0"),
+            ("licenses","activated_at", "TEXT NOT NULL DEFAULT ''"),
+            ("licenses","app_id",       "TEXT NOT NULL DEFAULT ''"),
+            ("machines","seat_key",     "TEXT NOT NULL DEFAULT ''"),
+            ("machines","windows_user", "TEXT NOT NULL DEFAULT ''"),
+        }) {
+            try { Exec(db, $"ALTER TABLE {col.Item1} ADD COLUMN {col.Item2} {col.Item3}"); } catch {}
+        }
         RsaSvc.EnsureKeys(db);
+        // Seed first admin user
+        if (!string.IsNullOrEmpty(firstUser) && !string.IsNullOrEmpty(firstPass) && !UserExists(db, firstUser)) {
+            string id = Guid.NewGuid().ToString();
+            string ak = Guid.NewGuid().ToString("N");
+            CreateAdminUser(db, id, firstUser, firstPass, "superadmin", ak);
+            Console.WriteLine($"[INFO] First admin user created: {firstUser}");
+        }
     }
 
-    static void Exec(SqliteConnection db, string sql)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+    static void Exec(SqliteConnection db, string sql) {
+        using var c = db.CreateCommand(); c.CommandText = sql; c.ExecuteNonQuery();
     }
 
     // ── Stats ──────────────────────────────────────────────────────────────────
-    public static object GetStats(SqliteConnection db)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM licenses";
-        long total = (long)cmd.ExecuteScalar()!;
+    public static object GetStats(SqliteConnection db) {
+        long Q(string sql) { using var c=db.CreateCommand(); c.CommandText=sql; return (long)c.ExecuteScalar()!; }
+        return new {
+            totalLicenses   = Q("SELECT COUNT(*) FROM licenses"),
+            activeLicenses  = Q("SELECT COUNT(*) FROM licenses WHERE revoked=0"),
+            expiredLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=0 AND type='temp' AND expiry<>'' AND expiry < date('now')"),
+            revokedLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=1"),
+            activeMachines  = Q("SELECT COUNT(*) FROM machines WHERE status='active'"),
+            totalApps       = Q("SELECT COUNT(*) FROM apps"),
+            totalAdminUsers = Q("SELECT COUNT(*) FROM admin_users")
+        };
+    }
 
-        cmd.CommandText = "SELECT COUNT(*) FROM licenses WHERE revoked=0 AND (type='lifetime' OR (type='temp' AND (expiry='' OR expiry >= date('now'))))";
-        long active = (long)cmd.ExecuteScalar()!;
+    // ── Admin users ────────────────────────────────────────────────────────────
+    public static bool UserExists(SqliteConnection db, string username) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT COUNT(*) FROM admin_users WHERE username=$u";
+        c.Parameters.AddWithValue("$u", username);
+        return (long)c.ExecuteScalar()! > 0;
+    }
 
-        cmd.CommandText = "SELECT COUNT(*) FROM licenses WHERE type='temp' AND expiry<>'' AND expiry < date('now') AND revoked=0";
-        long expired = (long)cmd.ExecuteScalar()!;
+    public static bool ApiKeyValid(SqliteConnection db, string key) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT COUNT(*) FROM admin_users WHERE api_key=$k";
+        c.Parameters.AddWithValue("$k", key);
+        return (long)c.ExecuteScalar()! > 0;
+    }
 
-        cmd.CommandText = "SELECT COUNT(*) FROM licenses WHERE revoked=1";
-        long revoked = (long)cmd.ExecuteScalar()!;
+    public static string? Login(SqliteConnection db, string username, string password) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id, password_hash, api_key FROM admin_users WHERE username=$u";
+        c.Parameters.AddWithValue("$u", username);
+        using var r = c.ExecuteReader();
+        if (!r.Read()) return null;
+        string id   = r.GetString(0);
+        string hash = r.GetString(1);
+        string key  = r.GetString(2);
+        if (!VerifyPassword(password, hash)) return null;
+        using var u = db.CreateCommand();
+        u.CommandText = "UPDATE admin_users SET last_login=$t WHERE id=$id";
+        u.Parameters.AddWithValue("$t",  DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+        u.Parameters.AddWithValue("$id", id);
+        u.ExecuteNonQuery();
+        return key;
+    }
 
-        cmd.CommandText = "SELECT COUNT(*) FROM machines WHERE status='active'";
-        long machines = (long)cmd.ExecuteScalar()!;
+    public static List<object> GetAdminUsers(SqliteConnection db) {
+        var list = new List<object>();
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id,username,role,created_at,last_login FROM admin_users ORDER BY created_at";
+        using var r = c.ExecuteReader();
+        while (r.Read())
+            list.Add(new { id=r.GetString(0), username=r.GetString(1), role=r.GetString(2),
+                           createdAt=r.GetString(3), lastLogin=r.GetString(4) });
+        return list;
+    }
 
-        return new { total, active, expired, revoked, machines };
+    public static void CreateAdminUser(SqliteConnection db, string id, string username, string password, string role, string apiKey) {
+        using var c = db.CreateCommand();
+        c.CommandText = @"INSERT INTO admin_users(id,username,password_hash,api_key,role,created_at)
+                          VALUES($id,$u,$h,$k,$r,$t)";
+        c.Parameters.AddWithValue("$id", id);
+        c.Parameters.AddWithValue("$u",  username);
+        c.Parameters.AddWithValue("$h",  HashPassword(password));
+        c.Parameters.AddWithValue("$k",  apiKey);
+        c.Parameters.AddWithValue("$r",  role);
+        c.Parameters.AddWithValue("$t",  DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+        c.ExecuteNonQuery();
+    }
+
+    public static void DeleteAdminUser(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "DELETE FROM admin_users WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void ResetApiKey(SqliteConnection db, string id, string newKey) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE admin_users SET api_key=$k WHERE id=$id";
+        c.Parameters.AddWithValue("$k", newKey); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
+    }
+
+    static string HashPassword(string pw) {
+        byte[] salt = RandomNumberGenerator.GetBytes(16);
+        var dk = new Rfc2898DeriveBytes(pw, salt, 100000, HashAlgorithmName.SHA256);
+        return Convert.ToBase64String(salt) + ":" + Convert.ToBase64String(dk.GetBytes(32));
+    }
+
+    static bool VerifyPassword(string pw, string stored) {
+        var p = stored.Split(':');
+        if (p.Length != 2) return false;
+        try {
+            byte[] salt = Convert.FromBase64String(p[0]);
+            byte[] exp  = Convert.FromBase64String(p[1]);
+            var dk = new Rfc2898DeriveBytes(pw, salt, 100000, HashAlgorithmName.SHA256);
+            return dk.GetBytes(32).SequenceEqual(exp);
+        } catch { return false; }
+    }
+
+    // ── Apps ───────────────────────────────────────────────────────────────────
+    public static List<object> GetApps(SqliteConnection db) {
+        var list = new List<object>();
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id,name,description,created_at FROM apps ORDER BY name";
+        using var r = c.ExecuteReader();
+        while (r.Read())
+            list.Add(new { id=r.GetString(0), name=r.GetString(1), description=r.GetString(2), createdAt=r.GetString(3) });
+        return list;
+    }
+
+    public static void CreateApp(SqliteConnection db, string id, string name, string desc) {
+        using var c = db.CreateCommand();
+        c.CommandText = "INSERT INTO apps(id,name,description,created_at) VALUES($id,$n,$d,$t)";
+        c.Parameters.AddWithValue("$id", id); c.Parameters.AddWithValue("$n", name);
+        c.Parameters.AddWithValue("$d",  desc);
+        c.Parameters.AddWithValue("$t",  DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
+        c.ExecuteNonQuery();
+    }
+
+    public static void DeleteApp(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "DELETE FROM apps WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
     }
 
     // ── Licenses ───────────────────────────────────────────────────────────────
     public record LicenseRow(string Id, string Label, string Type, string Expiry, string Issued,
-        bool Revoked, int MaxActivations, string Notes)
-    {
-        public bool IsExpired() =>
-            Type == "temp" && !string.IsNullOrEmpty(Expiry) &&
-            DateTime.TryParse(Expiry, out var d) && d.Date < DateTime.UtcNow.Date;
-    }
+        bool Revoked, int MaxActivations, int DurationDays, string ActivatedAt, string AppId, string Notes);
 
-    public static List<object> GetLicenses(SqliteConnection db)
-    {
+    public static List<object> GetLicenses(SqliteConnection db) {
         var list = new List<object>();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT id,label,type,expiry,issued,revoked,max_activations,notes FROM licenses ORDER BY issued DESC";
-        using var r = cmd.ExecuteReader();
+        using var c = db.CreateCommand();
+        c.CommandText = @"SELECT l.id,l.label,l.type,l.expiry,l.issued,l.revoked,l.max_activations,
+                                 l.duration_days,l.activated_at,l.app_id,l.notes,
+                                 a.name, COUNT(m.id) as seats
+                          FROM licenses l
+                          LEFT JOIN apps a ON a.id=l.app_id
+                          LEFT JOIN machines m ON m.license_id=l.id AND m.status='active'
+                          GROUP BY l.id ORDER BY l.issued DESC";
+        using var r = c.ExecuteReader();
         while (r.Read())
             list.Add(new {
-                id             = r.GetString(0),
-                label          = r.GetString(1),
-                type           = r.GetString(2),
-                expiry         = r.GetString(3),
-                issued         = r.GetString(4),
-                revoked        = r.GetInt32(5) == 1,
-                maxActivations = r.GetInt32(6),
-                notes          = r.GetString(7)
+                id=r.GetString(0), label=r.GetString(1), type=r.GetString(2),
+                expiry=r.GetString(3), issued=r.GetString(4), revoked=r.GetInt32(5)==1,
+                maxActivations=r.GetInt32(6), durationDays=r.GetInt32(7),
+                activatedAt=r.GetString(8), appId=r.GetString(9), notes=r.GetString(10),
+                appName=r.IsDBNull(11)?"":r.GetString(11),
+                activeSeats=r.GetInt32(12)
             });
         return list;
     }
 
-    public static LicenseRow? GetLicenseById(SqliteConnection db, string id)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT id,label,type,expiry,issued,revoked,max_activations,notes FROM licenses WHERE id=$id";
-        cmd.Parameters.AddWithValue("$id", id);
-        using var r = cmd.ExecuteReader();
+    public static LicenseRow? GetLicenseById(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id,label,type,expiry,issued,revoked,max_activations,duration_days,activated_at,app_id,notes FROM licenses WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id);
+        using var r = c.ExecuteReader();
         if (!r.Read()) return null;
-        return new LicenseRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
-            r.GetString(4), r.GetInt32(5) == 1, r.GetInt32(6), r.GetString(7));
+        return new LicenseRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),
+            r.GetString(4),r.GetInt32(5)==1,r.GetInt32(6),r.GetInt32(7),r.GetString(8),r.GetString(9),r.GetString(10));
     }
 
     public static void CreateLicense(SqliteConnection db, string id, string label, string type,
-        string expiry, string issued, int maxAct, string notes)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = @"INSERT INTO licenses (id,label,type,expiry,issued,max_activations,notes)
-                            VALUES ($id,$label,$type,$expiry,$issued,$maxAct,$notes)";
-        cmd.Parameters.AddWithValue("$id",     id);
-        cmd.Parameters.AddWithValue("$label",  label);
-        cmd.Parameters.AddWithValue("$type",   type);
-        cmd.Parameters.AddWithValue("$expiry", expiry);
-        cmd.Parameters.AddWithValue("$issued", issued);
-        cmd.Parameters.AddWithValue("$maxAct", maxAct);
-        cmd.Parameters.AddWithValue("$notes",  notes);
-        cmd.ExecuteNonQuery();
+        string expiry, string issued, int maxAct, int durDays, string appId, string notes) {
+        using var c = db.CreateCommand();
+        c.CommandText = @"INSERT INTO licenses(id,label,type,expiry,issued,max_activations,duration_days,app_id,notes)
+                          VALUES($id,$l,$t,$e,$i,$m,$d,$a,$n)";
+        c.Parameters.AddWithValue("$id", id);  c.Parameters.AddWithValue("$l",  label);
+        c.Parameters.AddWithValue("$t",  type); c.Parameters.AddWithValue("$e",  expiry);
+        c.Parameters.AddWithValue("$i",  issued); c.Parameters.AddWithValue("$m",  maxAct);
+        c.Parameters.AddWithValue("$d",  durDays); c.Parameters.AddWithValue("$a",  appId);
+        c.Parameters.AddWithValue("$n",  notes);
+        c.ExecuteNonQuery();
     }
 
-    public static void RevokeLicense(SqliteConnection db, string id)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "UPDATE licenses SET revoked=1 WHERE id=$id";
-        cmd.Parameters.AddWithValue("$id", id);
-        cmd.ExecuteNonQuery();
-        // Revoke all machines on this license
-        cmd.CommandText = "UPDATE machines SET status='revoked' WHERE license_id=$id";
-        cmd.ExecuteNonQuery();
+    public static void RevokeLicense(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE licenses SET revoked=1 WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+        c.CommandText = "UPDATE machines SET status='revoked' WHERE license_id=$id";
+        c.ExecuteNonQuery();
+    }
+
+    public static void SetActivatedAt(SqliteConnection db, string id, string date) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE licenses SET activated_at=$d WHERE id=$id AND activated_at=''";
+        c.Parameters.AddWithValue("$d", date); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
     }
 
     // ── Machines ───────────────────────────────────────────────────────────────
-    public record MachineRow(string Id, string LicenseId, string Fingerprint, string Hostname,
-        string IpAddress, string FirstSeen, string LastSeen, string Status);
+    public record MachineRow(string Id, string LicenseId, string SeatKey, string Hostname,
+        string WindowsUser, string IpAddress, string FirstSeen, string LastSeen, string Status);
 
-    public static List<object> GetMachines(SqliteConnection db)
-    {
+    public static List<object> GetMachines(SqliteConnection db) {
         var list = new List<object>();
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = @"SELECT m.id, m.license_id, l.label, m.fingerprint, m.hostname,
-                                   m.ip_address, m.first_seen, m.last_seen, m.status
-                            FROM machines m
-                            LEFT JOIN licenses l ON l.id=m.license_id
-                            ORDER BY m.last_seen DESC";
-        using var r = cmd.ExecuteReader();
+        using var c = db.CreateCommand();
+        c.CommandText = @"SELECT m.id,m.license_id,l.label,m.seat_key,m.hostname,m.windows_user,
+                                 m.ip_address,m.first_seen,m.last_seen,m.status
+                          FROM machines m LEFT JOIN licenses l ON l.id=m.license_id
+                          ORDER BY m.last_seen DESC";
+        using var r = c.ExecuteReader();
         while (r.Read())
             list.Add(new {
-                id          = r.GetString(0),
-                licenseId   = r.GetString(1),
-                licenseLabel= r.IsDBNull(2) ? "" : r.GetString(2),
-                fingerprint = r.GetString(3),
-                hostname    = r.GetString(4),
-                ipAddress   = r.GetString(5),
-                firstSeen   = r.GetString(6),
-                lastSeen    = r.GetString(7),
-                status      = r.GetString(8)
+                id=r.GetString(0), licenseId=r.GetString(1),
+                licenseLabel=r.IsDBNull(2)?"":r.GetString(2),
+                seatKey=r.GetString(3), hostname=r.GetString(4),
+                windowsUser=r.GetString(5), ipAddress=r.GetString(6),
+                firstSeen=r.GetString(7), lastSeen=r.GetString(8), status=r.GetString(9)
             });
         return list;
     }
 
-    public static MachineRow? GetMachineByLicAndFp(SqliteConnection db, string licId, string fp)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT id,license_id,fingerprint,hostname,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (fingerprint=$fp OR fingerprint='') LIMIT 1";
-        cmd.Parameters.AddWithValue("$lic", licId);
-        cmd.Parameters.AddWithValue("$fp",  fp);
-        using var r = cmd.ExecuteReader();
+    public static MachineRow? GetMachineByLicAndSeat(SqliteConnection db, string licId, string seatKey) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$sk OR seat_key='') LIMIT 1";
+        c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
+        using var r = c.ExecuteReader();
         if (!r.Read()) return null;
-        return new MachineRow(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
-            r.GetString(4), r.GetString(5), r.GetString(6), r.GetString(7));
+        return new MachineRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),
+            r.GetString(4),r.GetString(5),r.GetString(6),r.GetString(7),r.GetString(8));
     }
 
-    public static int GetActivationCount(SqliteConnection db, string licId)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
-        cmd.Parameters.AddWithValue("$lic", licId);
-        return (int)(long)cmd.ExecuteScalar()!;
+    public static int GetActivationCount(SqliteConnection db, string licId) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
+        c.Parameters.AddWithValue("$lic", licId);
+        return (int)(long)c.ExecuteScalar()!;
     }
 
-    public static void CreateMachine(SqliteConnection db, string id, string licId, string fp,
-        string host, string ip)
-    {
+    public static void CreateMachine(SqliteConnection db, string id, string licId,
+        string seatKey, string host, string winUser, string ip) {
         string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = @"INSERT INTO machines (id,license_id,fingerprint,hostname,ip_address,first_seen,last_seen)
-                            VALUES ($id,$lic,$fp,$host,$ip,$now,$now)";
-        cmd.Parameters.AddWithValue("$id",   id);
-        cmd.Parameters.AddWithValue("$lic",  licId);
-        cmd.Parameters.AddWithValue("$fp",   fp);
-        cmd.Parameters.AddWithValue("$host", host);
-        cmd.Parameters.AddWithValue("$ip",   ip);
-        cmd.Parameters.AddWithValue("$now",  now);
-        cmd.ExecuteNonQuery();
+        using var c = db.CreateCommand();
+        c.CommandText = @"INSERT INTO machines(id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen)
+                          VALUES($id,$lic,$sk,$h,$w,$ip,$t,$t)";
+        c.Parameters.AddWithValue("$id",  id);   c.Parameters.AddWithValue("$lic", licId);
+        c.Parameters.AddWithValue("$sk",  seatKey); c.Parameters.AddWithValue("$h",   host);
+        c.Parameters.AddWithValue("$w",   winUser); c.Parameters.AddWithValue("$ip",  ip);
+        c.Parameters.AddWithValue("$t",   now);
+        c.ExecuteNonQuery();
     }
 
-    public static void UpdateMachineCheckin(SqliteConnection db, string id, string host, string ip)
-    {
+    public static void UpdateMachineCheckin(SqliteConnection db, string id, string host, string ip) {
         string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "UPDATE machines SET last_seen=$now, hostname=$host, ip_address=$ip WHERE id=$id";
-        cmd.Parameters.AddWithValue("$now",  now);
-        cmd.Parameters.AddWithValue("$host", host);
-        cmd.Parameters.AddWithValue("$ip",   ip);
-        cmd.Parameters.AddWithValue("$id",   id);
-        cmd.ExecuteNonQuery();
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip WHERE id=$id";
+        c.Parameters.AddWithValue("$t", now); c.Parameters.AddWithValue("$h", host);
+        c.Parameters.AddWithValue("$ip", ip); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
     }
 
-    public static void RevokeMachine(SqliteConnection db, string id)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "UPDATE machines SET status='revoked' WHERE id=$id";
-        cmd.Parameters.AddWithValue("$id", id);
-        cmd.ExecuteNonQuery();
+    public static void RevokeMachine(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET status='revoked' WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
     }
 }
 
@@ -412,103 +605,67 @@ static class DB
 // ═══════════════════════════════════════════════════════════════════════════════
 static class RsaSvc
 {
-    // Generate RSA-2048 key pair on first run; store as XML strings compatible
-    // with .NET Framework 4.0 RSACryptoServiceProvider.FromXmlString().
-    public static void EnsureKeys(SqliteConnection db)
-    {
-        using var check = db.CreateCommand();
-        check.CommandText = "SELECT COUNT(*) FROM rsa_keys";
-        long count = (long)check.ExecuteScalar()!;
-        if (count > 0) return;
-
-        Console.WriteLine("[INFO] Generating RSA-2048 key pair (first run)...");
-        using var rsa    = RSA.Create(2048);
-        var parms        = rsa.ExportParameters(true);
-        string privXml   = ParamsToXml(parms, includePrivate: true);
-        string pubXml    = ParamsToXml(parms, includePrivate: false);
-
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "INSERT INTO rsa_keys (private_key, public_key) VALUES ($priv, $pub)";
-        cmd.Parameters.AddWithValue("$priv", privXml);
-        cmd.Parameters.AddWithValue("$pub",  pubXml);
+    public static void EnsureKeys(SqliteConnection db) {
+        using var chk = db.CreateCommand();
+        chk.CommandText = "SELECT COUNT(*) FROM rsa_keys";
+        if ((long)chk.ExecuteScalar()! > 0) return;
+        Console.WriteLine("[INFO] Generating RSA-2048 key pair...");
+        using var rsa  = RSA.Create(2048);
+        var prms       = rsa.ExportParameters(true);
+        using var cmd  = db.CreateCommand();
+        cmd.CommandText = "INSERT INTO rsa_keys(private_key,public_key) VALUES($priv,$pub)";
+        cmd.Parameters.AddWithValue("$priv", ToXml(prms, true));
+        cmd.Parameters.AddWithValue("$pub",  ToXml(prms, false));
         cmd.ExecuteNonQuery();
-        Console.WriteLine("[INFO] RSA key pair stored. Fetch public key from /api/admin/publickey");
+        Console.WriteLine("[INFO] RSA keys stored. Fetch public key from /api/admin/publickey");
     }
 
-    public static string GetPublicKeyXml(SqliteConnection db)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT public_key FROM rsa_keys LIMIT 1";
-        return (string?)cmd.ExecuteScalar() ?? "";
+    public static string GetPublicKeyXml(SqliteConnection db) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT public_key FROM rsa_keys LIMIT 1";
+        return (string?)c.ExecuteScalar() ?? "";
     }
 
-    static string GetPrivateKeyXml(SqliteConnection db)
-    {
-        using var cmd = db.CreateCommand();
-        cmd.CommandText = "SELECT private_key FROM rsa_keys LIMIT 1";
-        return (string?)cmd.ExecuteScalar() ?? "";
+    static string GetPrivKeyXml(SqliteConnection db) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT private_key FROM rsa_keys LIMIT 1";
+        return (string?)c.ExecuteScalar() ?? "";
     }
 
-    public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl)
-    {
-        string payload = $"{lic.Id}|{lic.Type}|{lic.Expiry}|{lic.Issued}";
-        byte[] data    = Encoding.UTF8.GetBytes(payload);
-
-        string privXml = GetPrivateKeyXml(db);
-        var parms      = XmlToParams(privXml, includePrivate: true);
-        using var rsa  = RSA.Create();
-        rsa.ImportParameters(parms);
-        byte[] sig     = rsa.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
-
+    public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl) {
+        // Payload includes durationDays so client can validate days-type locally
+        string payload = $"{lic.Id}|{lic.Type}|{lic.Expiry}|{lic.Issued}|{lic.DurationDays}";
+        var parms = XmlToParams(GetPrivKeyXml(db), true);
+        using var rsa = RSA.Create(); rsa.ImportParameters(parms);
+        byte[] sig = rsa.SignData(Encoding.UTF8.GetBytes(payload), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         return $"WDPMGR_LICENSE_V1\r\n" +
                $"id={lic.Id}\r\n" +
                $"type={lic.Type}\r\n" +
                $"expiry={lic.Expiry}\r\n" +
                $"issued={lic.Issued}\r\n" +
+               $"durationDays={lic.DurationDays}\r\n" +
+               $"appId={lic.AppId}\r\n" +
                $"server={serverUrl}\r\n" +
                $"sig={Convert.ToBase64String(sig)}\r\n";
     }
 
-    // Build XML format that .NET 4.0 RSACryptoServiceProvider.FromXmlString() can consume
-    static string ParamsToXml(RSAParameters p, bool includePrivate)
-    {
+    static string ToXml(RSAParameters p, bool priv) {
         var sb = new StringBuilder("<RSAKeyValue>");
-        sb.Append($"<Modulus>{B64(p.Modulus!)}</Modulus>");
-        sb.Append($"<Exponent>{B64(p.Exponent!)}</Exponent>");
-        if (includePrivate)
-        {
-            sb.Append($"<P>{B64(p.P!)}</P>");
-            sb.Append($"<Q>{B64(p.Q!)}</Q>");
-            sb.Append($"<DP>{B64(p.DP!)}</DP>");
-            sb.Append($"<DQ>{B64(p.DQ!)}</DQ>");
-            sb.Append($"<InverseQ>{B64(p.InverseQ!)}</InverseQ>");
-            sb.Append($"<D>{B64(p.D!)}</D>");
+        sb.Append($"<Modulus>{B64(p.Modulus!)}</Modulus><Exponent>{B64(p.Exponent!)}</Exponent>");
+        if (priv) {
+            sb.Append($"<P>{B64(p.P!)}</P><Q>{B64(p.Q!)}</Q><DP>{B64(p.DP!)}</DP>");
+            sb.Append($"<DQ>{B64(p.DQ!)}</DQ><InverseQ>{B64(p.InverseQ!)}</InverseQ><D>{B64(p.D!)}</D>");
         }
-        sb.Append("</RSAKeyValue>");
-        return sb.ToString();
+        return sb.Append("</RSAKeyValue>").ToString();
     }
 
-    static RSAParameters XmlToParams(string xml, bool includePrivate)
-    {
-        var doc  = XDocument.Parse(xml);
-        var root = doc.Root!;
-        var p    = new RSAParameters
-        {
-            Modulus  = GetB(root, "Modulus"),
-            Exponent = GetB(root, "Exponent")
-        };
-        if (includePrivate)
-        {
-            p.P        = GetB(root, "P");
-            p.Q        = GetB(root, "Q");
-            p.DP       = GetB(root, "DP");
-            p.DQ       = GetB(root, "DQ");
-            p.InverseQ = GetB(root, "InverseQ");
-            p.D        = GetB(root, "D");
-        }
+    static RSAParameters XmlToParams(string xml, bool priv) {
+        var root = XDocument.Parse(xml).Root!;
+        var p = new RSAParameters { Modulus=GB(root,"Modulus"), Exponent=GB(root,"Exponent") };
+        if (priv) { p.P=GB(root,"P"); p.Q=GB(root,"Q"); p.DP=GB(root,"DP"); p.DQ=GB(root,"DQ"); p.InverseQ=GB(root,"InverseQ"); p.D=GB(root,"D"); }
         return p;
     }
 
     static string B64(byte[] b) => Convert.ToBase64String(b);
-    static byte[] GetB(XElement e, string tag) => Convert.FromBase64String(e.Element(tag)!.Value);
+    static byte[] GB(XElement e, string t) => Convert.FromBase64String(e.Element(t)!.Value);
 }

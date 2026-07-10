@@ -8,146 +8,108 @@
 </head>
 <body>
 
-<!-- ── Login overlay ───────────────────────────────────────────────────────── -->
+<!-- ── Login ────────────────────────────────────────────────────────────────── -->
 <div id="login-overlay">
   <div class="login-box">
     <div class="login-logo">
-      <svg width="36" height="36" viewBox="0 0 36 36"><polygon points="18,2 30,8 30,20 18,32 6,20 6,8" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="11,18 16,23 26,13" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg width="40" height="40" viewBox="0 0 40 40"><polygon points="20,3 34,10 34,24 20,36 6,24 6,10" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="13,20 18,26 28,14" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </div>
     <div class="login-title">Windows Display Policy Manager</div>
     <div class="login-sub">Admin Panel</div>
-    <div class="login-field">
-      <label>Admin Key</label>
-      <input type="password" id="key-input" placeholder="Enter admin key" autocomplete="current-password"/>
-    </div>
+    <label class="field-label">Username</label>
+    <input type="text" id="login-user" placeholder="admin" autocomplete="username"/>
+    <label class="field-label">Password</label>
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"/>
     <div id="login-error" class="login-error"></div>
     <button class="btn-primary full-width" onclick="doLogin()">Sign In</button>
+    <div class="login-hint">Or use master key: enter it as password with username <em>master</em></div>
   </div>
 </div>
 
-<!-- ── Main app ────────────────────────────────────────────────────────────── -->
+<!-- ── App ──────────────────────────────────────────────────────────────────── -->
 <div id="app" class="hidden">
-
-  <!-- Sidebar -->
   <nav class="sidebar">
     <div class="sidebar-logo">
-      <svg width="28" height="28" viewBox="0 0 36 36"><polygon points="18,2 30,8 30,20 18,32 6,20 6,8" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="11,18 16,23 26,13" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <svg width="26" height="26" viewBox="0 0 40 40"><polygon points="20,3 34,10 34,24 20,36 6,24 6,10" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="13,20 18,26 28,14" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
       <span>WdpMgr</span>
     </div>
     <ul class="nav-list">
-      <li class="nav-item active" data-view="dashboard" onclick="switchView('dashboard', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
-        Dashboard
-      </li>
-      <li class="nav-item" data-view="licenses" onclick="switchView('licenses', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-        Licenses
-      </li>
-      <li class="nav-item" data-view="machines" onclick="switchView('machines', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><polyline points="8 21 12 17 16 21"/></svg>
-        Machines
-      </li>
-      <li class="nav-item" data-view="settings" onclick="switchView('settings', this)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        Settings
-      </li>
+      <li class="nav-item active" data-view="dashboard" onclick="nav('dashboard',this)"><i data-icon="grid"></i>Dashboard</li>
+      <li class="nav-item" data-view="licenses"  onclick="nav('licenses',this)"><i data-icon="file"></i>Licenses</li>
+      <li class="nav-item" data-view="machines"  onclick="nav('machines',this)"><i data-icon="monitor"></i>Machines</li>
+      <li class="nav-item" data-view="apps"      onclick="nav('apps',this)"><i data-icon="box"></i>Apps / DLLs</li>
+      <li class="nav-item" data-view="users"     onclick="nav('users',this)"><i data-icon="users"></i>Admin Users</li>
+      <li class="nav-item" data-view="settings"  onclick="nav('settings',this)"><i data-icon="settings"></i>Settings</li>
     </ul>
     <div class="sidebar-footer">
-      <button class="btn-ghost" onclick="doLogout()">Sign Out</button>
+      <div class="sidebar-whoami" id="whoami"></div>
+      <button class="btn-ghost full-width" onclick="doLogout()">Sign Out</button>
     </div>
   </nav>
 
-  <!-- Main content -->
   <main class="main-content">
 
-    <!-- Dashboard -->
+    <!-- ── Dashboard ─────────────────────────────────────────────────────────── -->
     <section id="view-dashboard" class="view active">
-      <div class="page-header">
-        <h1>Dashboard</h1>
-        <button class="btn-primary" onclick="switchView('licenses', document.querySelector('[data-view=licenses]'))">+ New License</button>
-      </div>
+      <div class="page-header"><h1>Dashboard</h1><button class="btn-primary" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))">+ New License</button></div>
       <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total Licenses</div>
-          <div class="stat-value" id="stat-total">—</div>
-        </div>
-        <div class="stat-card accent-green">
-          <div class="stat-label">Active</div>
-          <div class="stat-value" id="stat-active">—</div>
-        </div>
-        <div class="stat-card accent-amber">
-          <div class="stat-label">Expired</div>
-          <div class="stat-value" id="stat-expired">—</div>
-        </div>
-        <div class="stat-card accent-red">
-          <div class="stat-label">Revoked</div>
-          <div class="stat-value" id="stat-revoked">—</div>
-        </div>
-        <div class="stat-card accent-blue">
-          <div class="stat-label">Active Machines</div>
-          <div class="stat-value" id="stat-machines">—</div>
-        </div>
+        <div class="stat-card">           <div class="stat-label">Total Licenses</div>   <div class="stat-value" id="s-total">—</div></div>
+        <div class="stat-card accent-g">  <div class="stat-label">Active</div>            <div class="stat-value" id="s-active">—</div></div>
+        <div class="stat-card accent-a">  <div class="stat-label">Expired</div>           <div class="stat-value" id="s-expired">—</div></div>
+        <div class="stat-card accent-r">  <div class="stat-label">Revoked</div>           <div class="stat-value" id="s-revoked">—</div></div>
+        <div class="stat-card accent-b">  <div class="stat-label">Active Seats</div>      <div class="stat-value" id="s-machines">—</div></div>
+        <div class="stat-card">           <div class="stat-label">Apps Registered</div>   <div class="stat-value" id="s-apps">—</div></div>
+        <div class="stat-card">           <div class="stat-label">Admin Users</div>        <div class="stat-value" id="s-users">—</div></div>
       </div>
-      <div class="section-header">
-        <h2>Recent Machines</h2>
-        <a href="#" onclick="switchView('machines', document.querySelector('[data-view=machines]')); return false;" class="link-more">View all →</a>
-      </div>
-      <div id="recent-machines-wrap">
-        <table class="data-table">
-          <thead><tr><th>Hostname</th><th>License</th><th>Last Check-in</th><th>Status</th></tr></thead>
-          <tbody id="recent-machines"></tbody>
-        </table>
-      </div>
+      <div class="section-header"><h2>Recent Machines</h2><a href="#" class="link-more" onclick="nav('machines',document.querySelector('[data-view=machines]'));return false">View all →</a></div>
+      <table class="data-table"><thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>Last Check-in</th><th>Status</th></tr></thead><tbody id="dash-machines"></tbody></table>
     </section>
 
-    <!-- Licenses -->
+    <!-- ── Licenses ──────────────────────────────────────────────────────────── -->
     <section id="view-licenses" class="view">
-      <div class="page-header">
-        <h1>Licenses</h1>
-        <button class="btn-primary" onclick="openCreateModal()">+ New License</button>
-      </div>
-      <div id="licenses-wrap">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Label</th><th>Type</th><th>Issued</th><th>Expiry</th>
-              <th>Activations</th><th>Status</th><th>Actions</th>
-            </tr>
-          </thead>
-          <tbody id="licenses-body"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <!-- Machines -->
-    <section id="view-machines" class="view">
-      <div class="page-header"><h1>Machines</h1></div>
+      <div class="page-header"><h1>Licenses</h1><button class="btn-primary" onclick="openLicModal()">+ New License</button></div>
       <table class="data-table">
-        <thead>
-          <tr>
-            <th>Hostname</th><th>License</th><th>IP</th><th>First Seen</th>
-            <th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="machines-body"></tbody>
+        <thead><tr><th>Label</th><th>Type</th><th>App</th><th>Issued</th><th>Expiry / Duration</th><th>Seats</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="lic-body"></tbody>
       </table>
     </section>
 
-    <!-- Settings -->
+    <!-- ── Machines ──────────────────────────────────────────────────────────── -->
+    <section id="view-machines" class="view">
+      <div class="page-header"><h1>Machines / Seats</h1></div>
+      <table class="data-table">
+        <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>First Seen</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody id="mach-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Apps ──────────────────────────────────────────────────────────────── -->
+    <section id="view-apps" class="view">
+      <div class="page-header"><h1>Apps / DLLs</h1><button class="btn-primary" onclick="openModal('modal-app')">+ Register App</button></div>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="apps-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Admin Users ────────────────────────────────────────────────────────── -->
+    <section id="view-users" class="view">
+      <div class="page-header"><h1>Admin Users</h1><button class="btn-primary" onclick="openModal('modal-user')">+ Add User</button></div>
+      <table class="data-table">
+        <thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Last Login</th><th>Actions</th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Settings ──────────────────────────────────────────────────────────── -->
     <section id="view-settings" class="view">
       <div class="page-header"><h1>Settings</h1></div>
       <div class="settings-card">
-        <h3>RSA Public Key (embed in WdpMgr.cs)</h3>
-        <p class="settings-hint">Copy this key, run <code>tools\set-pubkey.bat</code> on your Windows build machine, then recompile.</p>
-        <button class="btn-secondary" onclick="loadPublicKey()" style="margin-bottom:12px">Load Public Key</button>
-        <textarea id="pubkey-area" class="code-area" rows="8" readonly placeholder="Click 'Load Public Key' to fetch from server..."></textarea>
+        <h3>RSA Public Key</h3>
+        <p class="hint">Copy this, run <code>tools\set-pubkey.bat</code> on your build machine, then recompile <code>WdpMgr.exe</code>.</p>
+        <button class="btn-secondary" onclick="loadPubKey()">Load Key</button>
+        <textarea id="pubkey-area" class="code-area" rows="7" readonly placeholder="Click 'Load Key'…"></textarea>
         <button class="btn-secondary" onclick="copyPubKey()">Copy to Clipboard</button>
-      </div>
-      <div class="settings-card" style="margin-top:20px">
-        <h3>Admin Key (current session)</h3>
-        <p class="settings-hint">Set via environment variable <code>WDPMGR_ADMIN_KEY</code> on the server.</p>
-        <div class="key-display" id="key-display">••••••••••••••••</div>
-        <button class="btn-secondary" onclick="toggleKey()">Show / Hide</button>
       </div>
     </section>
 
@@ -155,50 +117,47 @@
 </div>
 
 <!-- ── Create License Modal ─────────────────────────────────────────────────── -->
-<div id="modal-create" class="modal-overlay hidden">
+<div id="modal-lic" class="modal-overlay hidden">
   <div class="modal">
-    <div class="modal-header">
-      <h2>New License</h2>
-      <button class="modal-close" onclick="closeModal('modal-create')">✕</button>
-    </div>
+    <div class="modal-header"><h2>New License</h2><button class="modal-close" onclick="closeModal('modal-lic')">✕</button></div>
     <div class="modal-body">
       <label>Label <span class="req">*</span></label>
-      <input type="text" id="new-label" placeholder="e.g. Acme Corp – PC-01"/>
+      <input type="text" id="nl-label" placeholder="Client name / description"/>
 
-      <label>Type</label>
-      <select id="new-type" onchange="toggleExpiry()">
-        <option value="lifetime">Lifetime</option>
-        <option value="temp">Temporary (fixed expiry)</option>
+      <label>License Type</label>
+      <select id="nl-type" onchange="onLicTypeChange()">
+        <option value="lifetime">Lifetime (never expires)</option>
+        <option value="temp">Temp — fixed expiry date</option>
+        <option value="days">Days — expires N days from first activation</option>
+        <option value="hr">HR / Per-seat — tracks individual Windows users</option>
       </select>
 
-      <div id="expiry-row">
-        <label>Expiry Date</label>
-        <input type="date" id="new-expiry"/>
-      </div>
+      <div id="nl-row-expiry" class="hidden"><label>Expiry Date</label><input type="date" id="nl-expiry"/></div>
+      <div id="nl-row-days"   class="hidden"><label>Duration (days)</label><input type="number" id="nl-days" value="30" min="1"/></div>
 
-      <label>Max Activations</label>
-      <input type="number" id="new-maxact" value="1" min="1" max="100"/>
+      <label id="nl-seats-label">Max Machines / Seats</label>
+      <input type="number" id="nl-maxact" value="1" min="1"/>
+
+      <label>App / DLL (optional)</label>
+      <select id="nl-app"><option value="">— any app —</option></select>
 
       <label>Notes</label>
-      <textarea id="new-notes" rows="3" placeholder="Optional notes..."></textarea>
+      <textarea id="nl-notes" rows="2" placeholder="Optional internal notes…"></textarea>
     </div>
     <div class="modal-footer">
-      <button class="btn-ghost" onclick="closeModal('modal-create')">Cancel</button>
-      <button class="btn-primary" onclick="createLicense()">Create License</button>
+      <button class="btn-ghost" onclick="closeModal('modal-lic')">Cancel</button>
+      <button class="btn-primary" onclick="createLicense()">Create</button>
     </div>
   </div>
 </div>
 
-<!-- ── Revoke Confirm Modal ──────────────────────────────────────────────────── -->
+<!-- ── Revoke License Modal ──────────────────────────────────────────────────── -->
 <div id="modal-revoke" class="modal-overlay hidden">
   <div class="modal modal-sm">
-    <div class="modal-header">
-      <h2>Revoke License</h2>
-      <button class="modal-close" onclick="closeModal('modal-revoke')">✕</button>
-    </div>
+    <div class="modal-header"><h2>Revoke License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
     <div class="modal-body">
-      <p>Are you sure you want to revoke <strong id="revoke-label"></strong>?</p>
-      <p class="warn-text">The machine will be force-uninstalled on its next internet check-in.</p>
+      <p>Revoke <strong id="rv-label"></strong>?</p>
+      <p class="warn-text">The machine will self-uninstall on next internet check-in.</p>
     </div>
     <div class="modal-footer">
       <button class="btn-ghost" onclick="closeModal('modal-revoke')">Cancel</button>
@@ -207,9 +166,43 @@
   </div>
 </div>
 
-<!-- ── Toast ────────────────────────────────────────────────────────────────── -->
-<div id="toast" class="toast hidden"></div>
+<!-- ── Register App Modal ─────────────────────────────────────────────────────── -->
+<div id="modal-app" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Register App</h2><button class="modal-close" onclick="closeModal('modal-app')">✕</button></div>
+    <div class="modal-body">
+      <label>App Name <span class="req">*</span></label>
+      <input type="text" id="na-name" placeholder="e.g. WdpMgr v2, MyTool.exe"/>
+      <label>Description</label>
+      <input type="text" id="na-desc" placeholder="Optional description"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-app')">Cancel</button>
+      <button class="btn-primary" onclick="createApp()">Register</button>
+    </div>
+  </div>
+</div>
 
+<!-- ── Add Admin User Modal ───────────────────────────────────────────────────── -->
+<div id="modal-user" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Add Admin User</h2><button class="modal-close" onclick="closeModal('modal-user')">✕</button></div>
+    <div class="modal-body">
+      <label>Username <span class="req">*</span></label>
+      <input type="text" id="nu-username" placeholder="username"/>
+      <label>Password <span class="req">*</span></label>
+      <input type="password" id="nu-password" placeholder="password"/>
+      <label>Role</label>
+      <select id="nu-role"><option value="admin">Admin</option><option value="viewer">Viewer (read-only)</option><option value="superadmin">Superadmin</option></select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-user')">Cancel</button>
+      <button class="btn-primary" onclick="createUser()">Add User</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
 <script src="app.js"></script>
 </body>
 </html>
