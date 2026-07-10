@@ -191,7 +191,7 @@ app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
 // ── Settings (admin key reveal) ───────────────────────────────────────────────
 app.MapGet("/api/admin/settings", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
-    return Results.Json(new { adminKey = adminKey });
+    return Results.Json(new { adminKey = masterKey });
 });
 
 // ── Client check-in ───────────────────────────────────────────────────────────
