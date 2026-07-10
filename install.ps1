@@ -28,7 +28,7 @@ Write-Host "  ── Step 1/6: Configuration ───────────�
 
 $AdminKey = Read-Host "  Admin key (blank = auto-generate)"
 if ([string]::IsNullOrWhiteSpace($AdminKey)) {
-    $AdminKey = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | % { [char]$_ })
+    $AdminKey = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
     Warn "Auto-generated admin key: $AdminKey  ← SAVE THIS"
 }
 
@@ -45,14 +45,28 @@ Write-Host "    n = skip" -ForegroundColor DarkGray
 $UseCF = Read-Host "  Cloudflare Tunnel? [y/e/N]"
 $CF_ApiToken=$CF_AccountId=$CF_ZoneId=$CF_Domain=$CF_Subdomain=$CF_Hostname=""
 if ($UseCF -match "^[Yy]$") {
-    $CF_ApiToken  = Read-Host "  Cloudflare API token (Zone Read + DNS Edit + Tunnel:Edit)"
+    Write-Host ""
+    Write-Host "  Where to find these values:" -ForegroundColor DarkGray
+    Write-Host "    API Token  : dash.cloudflare.com -> My Profile -> API Tokens -> Create Token" -ForegroundColor DarkGray
+    Write-Host "                 Permissions needed: Tunnel:Edit, DNS:Edit, Zone:Read" -ForegroundColor DarkGray
+    Write-Host "    Account ID : right sidebar on dash.cloudflare.com homepage" -ForegroundColor DarkGray
+    Write-Host "    Zone ID    : right sidebar when you open your domain in Cloudflare" -ForegroundColor DarkGray
+    Write-Host ""
+    $CF_ApiToken  = Read-Host "  Cloudflare API token"
     $CF_AccountId = Read-Host "  Cloudflare Account ID"
     $CF_ZoneId    = Read-Host "  Cloudflare Zone ID"
-    $CF_Domain    = Read-Host "  Domain (e.g. example.com)"
-    $CF_Subdomain = Read-Host "  Subdomain prefix (e.g. wdpmgr)"
+    $CF_Domain    = Read-Host "  Root domain (e.g. example.com)"
+    $CF_Subdomain = Read-Host "  Subdomain prefix (e.g. wdpmgr  ->  wdpmgr.example.com)"
 } elseif ($UseCF -match "^[Ee]$") {
-    $CF_Hostname  = Read-Host "  Full hostname to use (e.g. wdpmgr.example.com)"
-    Write-Host "  (Optional) For auto DNS CNAME — leave blank to add manually:" -ForegroundColor DarkGray
+    Write-Host ""
+    Write-Host "  Where to find these values:" -ForegroundColor DarkGray
+    Write-Host "    Hostname   : the full subdomain you want (e.g. wdpmgr.example.com)" -ForegroundColor DarkGray
+    Write-Host "    API Token  : dash.cloudflare.com -> My Profile -> API Tokens -> Create Token" -ForegroundColor DarkGray
+    Write-Host "                 Permissions needed: DNS:Edit, Zone:Read  (Token:Edit if no tunnel yet)" -ForegroundColor DarkGray
+    Write-Host "    Zone ID    : right sidebar when you open your domain in Cloudflare" -ForegroundColor DarkGray
+    Write-Host "    (Leave API token blank to skip auto-DNS — add CNAME manually after)" -ForegroundColor DarkGray
+    Write-Host ""
+    $CF_Hostname  = Read-Host "  Full hostname (e.g. wdpmgr.example.com)"
     $CF_ApiToken  = Read-Host "  Cloudflare API token (blank = skip DNS)"
     if ($CF_ApiToken) {
         $CF_ZoneId = Read-Host "  Cloudflare Zone ID"
@@ -166,7 +180,7 @@ if ($UseCF -match "^[Yy]$") {
     $tunnelId = $tr.result[0].id
 
     if (-not $tunnelId) {
-        $sec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | % { [char]$_ })
+        $sec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
         $secB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sec))
         $cr = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId/cfd_tunnel" `
             -Headers $hdrs -Method POST -Body (@{name="wdpmgr-tunnel";tunnel_secret=$secB64}|ConvertTo-Json) -EA Stop
@@ -254,7 +268,7 @@ ingress:
         if ($CF_ApiToken) {
             $CF_AccountId2 = Read-Host "  Cloudflare Account ID (needed to create tunnel)"
             $hdrs2 = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
-            $sec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | % { [char]$_ })
+            $sec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
             $secB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sec))
             $cr    = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId2/cfd_tunnel" `
                          -Headers $hdrs2 -Method POST `
