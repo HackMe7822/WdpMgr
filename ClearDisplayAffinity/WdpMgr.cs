@@ -845,7 +845,7 @@ namespace WdpMgr
             lic = new LicenseData();
             try
             {
-                string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
+                string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
                 string path   = Path.Combine(exeDir, "wdp.lic");
                 if (!File.Exists(path)) return TryReadEmbeddedLicense(out lic);
                 string[] lines = File.ReadAllLines(path);
@@ -882,7 +882,7 @@ namespace WdpMgr
             {
                 const string BEGIN = "WDPMGR_LIC_BEGIN\n";
                 const string END   = "WDPMGR_LIC_END";
-                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                string exePath = Process.GetCurrentProcess().MainModule.FileName;
                 long fileLen   = new FileInfo(exePath).Length;
                 int  tailLen   = (int)Math.Min(8192, fileLen);
                 byte[] tail    = new byte[tailLen];
