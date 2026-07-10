@@ -163,6 +163,21 @@ app.MapDelete("/api/admin/licenses/{id}", (HttpContext ctx, string id) => {
     DB.RevokeLicense(db, id);
     return Results.Json(new { ok = true });
 });
+app.MapPut("/api/admin/licenses/{id}", async (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc   = await JsonDocument.ParseAsync(ctx.Request.Body);
+    var r           = doc.RootElement;
+    string label    = S(r, "label");
+    string expiry   = S(r, "expiry");
+    string notes    = S(r, "notes");
+    int maxAct      = I(r, "maxActivations", 1);
+    int durDays     = I(r, "durationDays", 0);
+    if (string.IsNullOrWhiteSpace(label))
+        return Results.Json(new { error = "label required" }, statusCode: 400);
+    using var db = DB.Open(dbPath);
+    DB.UpdateLicense(db, id, label, expiry, notes, maxAct, durDays);
+    return Results.Json(new { ok = true });
+});
 app.MapPost("/api/admin/licenses/{id}/reactivate", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
@@ -290,7 +305,8 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         if (lic.Revoked) return Results.Json(new { status="revoked" });
 
         // Type-specific expiry
-        if (lic.Type == "temp" && !string.IsNullOrEmpty(lic.Expiry))
+        // Expiry check — applies to temp and hr (optional expiry on hr)
+        if (!string.IsNullOrEmpty(lic.Expiry) && (lic.Type == "temp" || lic.Type == "hr"))
             if (DateTime.TryParse(lic.Expiry, out var ed) && ed.ToUniversalTime() < DateTime.UtcNow)
                 return Results.Json(new { status="expired" });
 
@@ -597,6 +613,18 @@ static class DB
         c.Parameters.AddWithValue("$i",  issued); c.Parameters.AddWithValue("$m",  maxAct);
         c.Parameters.AddWithValue("$d",  durDays); c.Parameters.AddWithValue("$a",  appId);
         c.Parameters.AddWithValue("$n",  notes);
+        c.ExecuteNonQuery();
+    }
+
+    public static void UpdateLicense(SqliteConnection db, string id, string label, string expiry, string notes, int maxAct, int durDays) {
+        using var c = db.CreateCommand();
+        c.CommandText = @"UPDATE licenses SET label=$l,expiry=$e,notes=$n,max_activations=$m,duration_days=$d WHERE id=$id";
+        c.Parameters.AddWithValue("$l",  label);
+        c.Parameters.AddWithValue("$e",  expiry);
+        c.Parameters.AddWithValue("$n",  notes);
+        c.Parameters.AddWithValue("$m",  maxAct);
+        c.Parameters.AddWithValue("$d",  durDays);
+        c.Parameters.AddWithValue("$id", id);
         c.ExecuteNonQuery();
     }
 
