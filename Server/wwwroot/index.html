@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>WdpMgr Admin</title>
-  <link rel="stylesheet" href="style.css?v=3"/>
+  <link rel="stylesheet" href="style.css?v=4"/>
 </head>
 <body>
 
@@ -161,7 +161,7 @@
         <option value="hr">HR / Per-seat — tracks individual Windows users</option>
       </select>
 
-      <div id="nl-row-expiry" class="hidden"><label>Expiry Date</label><input type="date" id="nl-expiry"/></div>
+      <div id="nl-row-expiry" class="hidden"><label>Expiry Date &amp; Time</label><input type="datetime-local" id="nl-expiry"/></div>
       <div id="nl-row-days"   class="hidden"><label>Duration (days)</label><input type="number" id="nl-days" value="30" min="1"/></div>
 
       <label id="nl-seats-label">Max Machines / Seats</label>
@@ -232,6 +232,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

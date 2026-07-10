@@ -238,9 +238,13 @@ app.MapGet("/api/admin/settings", (HttpContext ctx) => {
     string exePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
     bool exeUploaded = File.Exists(exePath);
     long exeSize     = exeUploaded ? new FileInfo(exePath).Length : 0;
+    // Auto-detect public URL (respects Cloudflare X-Forwarded-Proto)
+    string proto = ctx.Request.Headers.TryGetValue("X-Forwarded-Proto", out var xfp) ? xfp.ToString() : ctx.Request.Scheme;
+    string detectedUrl = $"{proto}://{ctx.Request.Host}";
     return Results.Json(new {
-        adminKey  = masterKey,
-        serverUrl = DB.GetSetting(db, "server_url"),
+        adminKey    = masterKey,
+        serverUrl   = DB.GetSetting(db, "server_url"),
+        detectedUrl,
         exeUploaded, exeSize
     });
 });
@@ -275,7 +279,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
 
         // Type-specific expiry
         if (lic.Type == "temp" && !string.IsNullOrEmpty(lic.Expiry))
-            if (DateTime.TryParse(lic.Expiry, out var ed) && ed.Date < DateTime.UtcNow.Date)
+            if (DateTime.TryParse(lic.Expiry, out var ed) && ed.ToUniversalTime() < DateTime.UtcNow)
                 return Results.Json(new { status="expired" });
 
         if (lic.Type == "days") {

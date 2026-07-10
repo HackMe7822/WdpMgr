@@ -321,12 +321,19 @@ function dlExe(id) {
 // ── Settings ──────────────────────────────────────────────────────────────────
 function loadSettings() {
   api('GET','/api/admin/settings').then(d => {
-    document.getElementById('server-url-input').value = d.serverUrl || '';
+    const urlInput = document.getElementById('server-url-input');
+    if (d.serverUrl) {
+      urlInput.value = d.serverUrl;
+    } else if (d.detectedUrl) {
+      urlInput.value = d.detectedUrl;
+      // Auto-save the detected URL so it's embedded in all EXEs
+      api('POST','/api/admin/settings',{serverUrl: d.detectedUrl}).catch(()=>{});
+    }
     const exSt = document.getElementById('exe-status');
     if (d.exeUploaded) {
-      exSt.innerHTML = `<span style="color:var(--green)">✓ WdpMgr_base.exe uploaded</span> <span class="muted">(${(d.exeSize/1024).toFixed(1)} KB)</span>`;
+      exSt.innerHTML = `<span style="color:var(--green)">✓ WdpMgr_base.exe ready</span> <span class="muted">(${(d.exeSize/1024).toFixed(1)} KB)</span>`;
     } else {
-      exSt.innerHTML = '<span style="color:var(--amber)">⚠ No base EXE uploaded yet — upload WdpMgr.exe to enable license downloads.</span>';
+      exSt.innerHTML = '<span style="color:var(--amber)">⚠ No base EXE found — upload WdpMgr.exe to enable license downloads.</span>';
     }
     if (d.adminKey) document.getElementById('adminkey-area').value = d.adminKey;
   }).catch(err => toast(err.message, true));
