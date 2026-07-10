@@ -852,7 +852,7 @@ namespace WdpMgr
             lic = new LicenseData();
             try
             {
-                string exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "");
+                string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName ?? "");
                 string path   = Path.Combine(exeDir, "wdp.lic");
                 if (!File.Exists(path)) return TryReadEmbeddedLicense(out lic);
                 string[] lines = File.ReadAllLines(path);
@@ -889,7 +889,7 @@ namespace WdpMgr
             {
                 const string BEGIN = "WDPMGR_LIC_BEGIN\n";
                 const string END   = "WDPMGR_LIC_END";
-                string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 long fileLen   = new FileInfo(exePath).Length;
                 int  tailLen   = (int)Math.Min(8192, fileLen);
                 byte[] tail    = new byte[tailLen];
@@ -1297,7 +1297,7 @@ namespace WdpMgr
                     "WdpCore.log")); } catch { }
 
             // Delete license file
-            string self = (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "");
+            string self = (Process.GetCurrentProcess().MainModule?.FileName ?? "");
             string exeDir = Path.GetDirectoryName(self);
             try { File.Delete(Path.Combine(exeDir, "wdp.lic")); } catch { }
 
@@ -1314,7 +1314,7 @@ namespace WdpMgr
         internal static bool InstallService(out string error)
         {
             error = null;
-            string src = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            string src = Process.GetCurrentProcess().MainModule?.FileName ?? "";
             // Copy EXE to ProgramData so SYSTEM account can always read it,
             // regardless of where the user saved the downloaded file.
             string dest = Path.Combine(
@@ -1373,7 +1373,7 @@ namespace WdpMgr
                 try
                 {
                     Process.Start(new ProcessStartInfo(
-                        (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? ""))
+                        (Process.GetCurrentProcess().MainModule?.FileName ?? ""))
                     {
                         UseShellExecute = true,
                         Verb            = "runas",
