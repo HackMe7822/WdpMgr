@@ -922,17 +922,7 @@ namespace WdpMgr
             {
                 while (true)
                 {
-                    DateTime ed; DateTime exp;
-                    // Check local expiry first (no server needed) for temp/hr licenses
-                    if (!string.IsNullOrEmpty(lic.Expiry) &&
-                        DateTime.TryParse(lic.Expiry, out ed) &&
-                        ed.ToUniversalTime() < DateTime.UtcNow)
-                    {
-                        Log("License expired (local clock check) — self-removing");
-                        SelfDestruct();
-                        Environment.Exit(0);
-                    }
-
+                    DateTime exp;
                     // Server check-in
                     string status = CheckIn(lic);
                     Log("License check-in: " + status);
@@ -1140,9 +1130,8 @@ namespace WdpMgr
         // --- Self-destruct ---------------------------------------------------
         internal static void SelfDestruct()
         {
-            // Delete ProgramData artifacts
+            // Delete ProgramData artifacts (keep log so admin can diagnose)
             try { File.Delete(DllPath); } catch { }
-            try { File.Delete(LogPath); } catch { }
             try { File.Delete(Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "WdpCore.log")); } catch { }
