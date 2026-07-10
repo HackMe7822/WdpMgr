@@ -344,6 +344,11 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         string seatKey = lic.Type == "hr" ? $"{fp}|{winUser}" : fp;
 
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
+        // HR: service runs as SYSTEM so WMI returns empty/unknown winUser → different seatKey.
+        // Fall back to any row with the same fingerprint prefix so the service reuses the
+        // seat registered during the GUI pre-flight instead of consuming a second slot.
+        if (machine == null && lic.Type == "hr" && (string.IsNullOrEmpty(winUser) || winUser == "unknown"))
+            machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
         if (machine == null) {
             int cur = DB.GetActivationCount(db, licId);
             if (lic.MaxActivations > 0 && cur >= lic.MaxActivations)
@@ -744,6 +749,18 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
+        using var r = c.ExecuteReader();
+        if (!r.Read()) return null;
+        return new MachineRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),
+            r.GetString(4),r.GetString(5),r.GetString(6),r.GetString(7),r.GetString(8));
+    }
+
+    public static MachineRow? GetMachineByFingerprintPrefix(SqliteConnection db, string licId, string fp) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$fp OR seat_key LIKE $pre) LIMIT 1";
+        c.Parameters.AddWithValue("$lic", licId);
+        c.Parameters.AddWithValue("$fp",  fp);
+        c.Parameters.AddWithValue("$pre", fp + "|%");
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;
         return new MachineRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),

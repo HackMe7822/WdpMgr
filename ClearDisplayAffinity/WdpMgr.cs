@@ -55,12 +55,20 @@ namespace WdpMgr
             Program.Log("License verified OK — checking in with server");
             string initStatus = Program.CheckIn(lic);
             Program.Log("License check-in on start: " + initStatus);
-            if (initStatus == "expired" || initStatus == "revoked" ||
-                initStatus == "wrong_machine" || initStatus == "invalid")
+            if (initStatus == "expired" || initStatus == "revoked" || initStatus == "invalid")
             {
                 Program.Log("License rejected by server (" + initStatus + ") — self-removing");
                 Program.SelfDestruct();
                 Environment.Exit(0);
+                return;
+            }
+            if (initStatus == "wrong_machine")
+            {
+                // Seat was already registered by the GUI pre-flight; service running as SYSTEM
+                // gets a different WMI UserName → server fix handles this, but stop cleanly
+                // rather than self-destruct in case server hasn't been updated yet.
+                Program.Log("wrong_machine on service startup — stopping service (not self-removing)");
+                this.Stop();
                 return;
             }
             Program.StartLicenseLoop(lic);
@@ -1061,8 +1069,7 @@ namespace WdpMgr
                     // Server check-in
                     string status = CheckIn(lic);
                     Log("License check-in: " + status);
-                    if (status == "expired"      || status == "revoked" ||
-                        status == "wrong_machine" || status == "invalid")
+                    if (status == "expired" || status == "revoked" || status == "invalid")
                     {
                         Log("License invalidated (" + status + ") — self-removing");
                         SelfDestruct();
