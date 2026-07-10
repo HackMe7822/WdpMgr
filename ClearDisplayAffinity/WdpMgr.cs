@@ -845,7 +845,7 @@ namespace WdpMgr
             lic = new LicenseData();
             try
             {
-                string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule.FileName);
+                string exeDir = Path.GetDirectoryName(Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "");
                 string path   = Path.Combine(exeDir, "wdp.lic");
                 if (!File.Exists(path)) return TryReadEmbeddedLicense(out lic);
                 string[] lines = File.ReadAllLines(path);
@@ -882,7 +882,7 @@ namespace WdpMgr
             {
                 const string BEGIN = "WDPMGR_LIC_BEGIN\n";
                 const string END   = "WDPMGR_LIC_END";
-                string exePath = Process.GetCurrentProcess().MainModule.FileName;
+                string exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 long fileLen   = new FileInfo(exePath).Length;
                 int  tailLen   = (int)Math.Min(8192, fileLen);
                 byte[] tail    = new byte[tailLen];
@@ -919,7 +919,7 @@ namespace WdpMgr
                 }
                 return !string.IsNullOrEmpty(lic.Id) && !string.IsNullOrEmpty(lic.Sig);
             }
-            catch { return false; }
+            catch (Exception ex) { Log("TryReadEmbeddedLicense failed: " + ex.GetType().Name + " — " + ex.Message); return false; }
         }
 
         internal static bool VerifyLicense(LicenseData lic)
@@ -1290,7 +1290,7 @@ namespace WdpMgr
                     "WdpCore.log")); } catch { }
 
             // Delete license file
-            string self = Process.GetCurrentProcess().MainModule.FileName;
+            string self = (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "");
             string exeDir = Path.GetDirectoryName(self);
             try { File.Delete(Path.Combine(exeDir, "wdp.lic")); } catch { }
 
@@ -1307,7 +1307,7 @@ namespace WdpMgr
         internal static bool InstallService(out string error)
         {
             error = null;
-            string exe = "\"" + Process.GetCurrentProcess().MainModule.FileName + "\"";
+            string exe = "\"" + (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "") + "\"";
             if (!RunSc("create WdpMgr binPath= " + exe + " start= auto DisplayName= \"Windows Display Policy Manager\" obj= LocalSystem"))
             { error = "sc create failed. Make sure you are running as Administrator."; return false; }
             RunSc("description WdpMgr \"Manages display policy parameters for Windows desktop sessions.\"");
@@ -1351,7 +1351,7 @@ namespace WdpMgr
                 try
                 {
                     Process.Start(new ProcessStartInfo(
-                        Process.GetCurrentProcess().MainModule.FileName)
+                        (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? ""))
                     {
                         UseShellExecute = true,
                         Verb            = "runas",
