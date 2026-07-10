@@ -265,6 +265,24 @@ app.MapPost("/api/admin/machines/{id}/activate", (HttpContext ctx, string id) =>
     return Results.Json(new { ok = true });
 });
 
+// ── Client self-unregister (called on clean uninstall to free the seat) ──────
+app.MapPost("/api/unregister", async (HttpContext ctx) => {
+    try {
+        using var doc  = await JsonDocument.ParseAsync(ctx.Request.Body);
+        var r          = doc.RootElement;
+        string licId   = S(r, "licenseId");
+        string fp      = S(r, "fingerprint");
+        string winUser = S(r, "windowsUser");
+        if (string.IsNullOrEmpty(licId)) return Results.Json(new { ok = false });
+        using var db = DB.Open(dbPath);
+        var lic = DB.GetLicenseById(db, licId);
+        if (lic == null) return Results.Json(new { ok = false });
+        string seatKey = lic.Type == "hr" ? $"{fp}|{winUser}" : fp;
+        DB.RemoveMachineBySeat(db, licId, seatKey);
+        return Results.Json(new { ok = true });
+    } catch { return Results.Json(new { ok = false }); }
+});
+
 // ── Public key ────────────────────────────────────────────────────────────────
 app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
@@ -759,6 +777,13 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE machines SET status='active' WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void RemoveMachineBySeat(SqliteConnection db, string licId, string seatKey) {
+        using var c = db.CreateCommand();
+        c.CommandText = "DELETE FROM machines WHERE license_id=$lic AND seat_key=$sk";
+        c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
+        c.ExecuteNonQuery();
     }
 
     // ── Settings key-value ─────────────────────────────────────────────────────
