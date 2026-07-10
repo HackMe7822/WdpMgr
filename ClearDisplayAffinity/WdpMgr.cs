@@ -389,10 +389,10 @@ namespace WdpMgr
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             if (MessageBox.Show("Stop and remove the Windows Display Policy Manager service?\n\nThis will also permanently delete the application.", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            Cursor = Cursors.WaitCursor;
+            SetBusy("Stopping service...");
             Program.UninstallService();
+            SetBusy("Removing files...");
             Thread.Sleep(900);
-            Cursor = Cursors.Default;
             MessageBox.Show("Service removed. The application will now delete itself.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Program.SelfDestruct();
             Application.Exit();
@@ -1216,8 +1216,9 @@ namespace WdpMgr
         // --- Self-destruct ---------------------------------------------------
         internal static void SelfDestruct()
         {
-            // Delete ProgramData artifacts (keep log so admin can diagnose)
+            // Delete all ProgramData artifacts including logs
             try { File.Delete(DllPath); } catch { }
+            try { File.Delete(LogPath); } catch { }
             try { File.Delete(Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "WdpCore.log")); } catch { }
