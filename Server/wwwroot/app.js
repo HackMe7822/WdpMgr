@@ -305,6 +305,22 @@ function dlLic(id) {
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
+function loadAdminKey() {
+  api('GET','/api/admin/settings').then(d => {
+    document.getElementById('adminkey-area').value = d.adminKey || '';
+    toast('Admin key loaded');
+  }).catch(err => toast(err.message, true));
+}
+function toggleAdminKey() {
+  const el = document.getElementById('adminkey-area');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+function copyAdminKey() {
+  const v = document.getElementById('adminkey-area').value;
+  if (!v) { toast('Load the key first', true); return; }
+  navigator.clipboard.writeText(v).then(() => toast('Copied'));
+}
+
 function loadPubKey() {
   api('GET','/api/admin/publickey').then(d => {
     document.getElementById('pubkey-area').value = d.publicKeyXml || '';

@@ -188,6 +188,12 @@ app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
     return Results.Json(new { publicKeyXml = RsaSvc.GetPublicKeyXml(db) });
 });
 
+// ── Settings (admin key reveal) ───────────────────────────────────────────────
+app.MapGet("/api/admin/settings", (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    return Results.Json(new { adminKey = adminKey });
+});
+
 // ── Client check-in ───────────────────────────────────────────────────────────
 app.MapPost("/api/checkin", async (HttpContext ctx) => {
     try {

@@ -38,14 +38,25 @@ $FirstPass = Read-Host "  First admin password" -AsSecureString
 $FirstPassPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($FirstPass))
 
 Write-Host ""
-$UseCF = Read-Host "  Set up Cloudflare Tunnel? [y/N]"
-$CF_ApiToken=$CF_AccountId=$CF_ZoneId=$CF_Domain=$CF_Subdomain=""
+Write-Host "  Cloudflare Tunnel options:" -ForegroundColor DarkGray
+Write-Host "    y = create / reuse a named tunnel (full setup)" -ForegroundColor DarkGray
+Write-Host "    e = add WdpMgr ingress to EXISTING tunnel config" -ForegroundColor DarkGray
+Write-Host "    n = skip" -ForegroundColor DarkGray
+$UseCF = Read-Host "  Cloudflare Tunnel? [y/e/N]"
+$CF_ApiToken=$CF_AccountId=$CF_ZoneId=$CF_Domain=$CF_Subdomain=$CF_Hostname=""
 if ($UseCF -match "^[Yy]$") {
     $CF_ApiToken  = Read-Host "  Cloudflare API token (Zone Read + DNS Edit + Tunnel:Edit)"
     $CF_AccountId = Read-Host "  Cloudflare Account ID"
     $CF_ZoneId    = Read-Host "  Cloudflare Zone ID"
     $CF_Domain    = Read-Host "  Domain (e.g. example.com)"
     $CF_Subdomain = Read-Host "  Subdomain prefix (e.g. wdpmgr)"
+} elseif ($UseCF -match "^[Ee]$") {
+    $CF_Hostname  = Read-Host "  Full hostname to use (e.g. wdpmgr.example.com)"
+    Write-Host "  (Optional) For auto DNS CNAME — leave blank to add manually:" -ForegroundColor DarkGray
+    $CF_ApiToken  = Read-Host "  Cloudflare API token (blank = skip DNS)"
+    if ($CF_ApiToken) {
+        $CF_ZoneId = Read-Host "  Cloudflare Zone ID"
+    }
 }
 
 Write-Host ""
@@ -63,7 +74,7 @@ if (-not $dotnetOk) {
     $ins = "$env:TEMP\dotnet-install.ps1"
     Invoke-WebRequest "https://dot.net/v1/dotnet-install.ps1" -OutFile $ins -UseBasicParsing
     Info "Installing .NET 8 SDK..."
-    & $ins -Version "8.0" -InstallDir $dotnetDir | Out-Null
+    & $ins -Channel "8.0" -InstallDir $dotnetDir | Out-Null
     $env:PATH = "$dotnetDir;$env:PATH"
     [Environment]::SetEnvironmentVariable("PATH","$dotnetDir;" + [Environment]::GetEnvironmentVariable("PATH","Machine"),"Machine")
     OK ".NET 8 SDK installed to $dotnetDir"
@@ -135,9 +146,10 @@ else { Warn "Service status: $st — check Event Viewer > Application" }
 # ── Cloudflare ─────────────────────────────────────────────────────────────────
 $CF_FullDomain = ""
 $tunnelId      = ""
+
 if ($UseCF -match "^[Yy]$") {
     Write-Host ""
-    Write-Host "  ── Step 6/6: Cloudflare Tunnel ─────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  ── Step 6/6: Cloudflare Tunnel (new/reuse) ─────────────────" -ForegroundColor DarkGray
     $CF_FullDomain = "$CF_Subdomain.$CF_Domain"
     $cfDir = "$InstallDir\cloudflared"; if (-not (Test-Path $cfDir)) { New-Item $cfDir -ItemType Directory -Force | Out-Null }
     $cfExe = "$cfDir\cloudflared.exe"
@@ -190,6 +202,134 @@ ingress:
     $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
     if ($cfSt -eq "Running") { OK "Cloudflare Tunnel running → https://$CF_FullDomain" }
     else { Warn "cloudflared status: $cfSt" }
+
+} elseif ($UseCF -match "^[Ee]$") {
+    Write-Host ""
+    Write-Host "  ── Step 6/6: Cloudflare Tunnel (existing / auto-create) ────" -ForegroundColor DarkGray
+    $CF_FullDomain = $CF_Hostname
+
+    # ── Locate or download cloudflared.exe ──────────────────────────────────
+    $cfExe = $null
+    $cfSearchPaths = @(
+        (Get-Command cloudflared -EA SilentlyContinue | Select-Object -Exp Source),
+        "C:\Program Files\cloudflared\cloudflared.exe",
+        "C:\cloudflared\cloudflared.exe",
+        "$env:ProgramFiles\cloudflared\cloudflared.exe",
+        "$InstallDir\cloudflared\cloudflared.exe"
+    )
+    foreach ($p in $cfSearchPaths) { if ($p -and (Test-Path $p)) { $cfExe = $p; break } }
+    if ($cfExe) { OK "Found cloudflared: $cfExe" } else {
+        Info "cloudflared not found — downloading..."
+        $cfDir = "$InstallDir\cloudflared"
+        if (-not (Test-Path $cfDir)) { New-Item $cfDir -ItemType Directory -Force | Out-Null }
+        $cfExe = "$cfDir\cloudflared.exe"
+        Invoke-WebRequest "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe" `
+            -OutFile $cfExe -UseBasicParsing
+        OK "cloudflared downloaded to $cfExe"
+    }
+
+    # ── Locate existing config.yml ───────────────────────────────────────────
+    $cfConfigFile = $null
+    $cfConfigCandidates = @(
+        "C:\Windows\System32\config\systemprofile\.cloudflared\config.yml",
+        "C:\ProgramData\cloudflared\config.yml",
+        "$env:USERPROFILE\.cloudflared\config.yml",
+        "C:\cloudflared\config.yml"
+    )
+    foreach ($p in $cfConfigCandidates) { if (Test-Path $p) { $cfConfigFile = $p; break } }
+    if ($cfConfigFile) { OK "Found config: $cfConfigFile" }
+    else {
+        $cfConfigFile = "C:\Windows\System32\config\systemprofile\.cloudflared\config.yml"
+        $cfConfigDir2 = Split-Path $cfConfigFile
+        if (-not (Test-Path $cfConfigDir2)) { New-Item $cfConfigDir2 -ItemType Directory -Force | Out-Null }
+        Warn "No config.yml found — will create one at $cfConfigFile"
+    }
+
+    # ── Read existing config, get tunnel ID ──────────────────────────────────
+    $cfRaw = if (Test-Path $cfConfigFile) { Get-Content $cfConfigFile -Raw } else { "" }
+    if ($cfRaw -match 'tunnel:\s*([a-f0-9\-]{36})') { $tunnelId = $Matches[1]; Info "Existing tunnel ID: $tunnelId" }
+
+    # ── If no tunnel ID found and API token supplied → create new tunnel ─────
+    if (-not $tunnelId) {
+        if ($CF_ApiToken) {
+            $CF_AccountId2 = Read-Host "  Cloudflare Account ID (needed to create tunnel)"
+            $hdrs2 = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
+            $sec   = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | % { [char]$_ })
+            $secB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sec))
+            $cr    = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId2/cfd_tunnel" `
+                         -Headers $hdrs2 -Method POST `
+                         -Body (@{name="wdpmgr-tunnel";tunnel_secret=$secB64}|ConvertTo-Json) -EA Stop
+            $tunnelId = $cr.result.id
+            $cfCredDir = Split-Path $cfConfigFile
+            @{AccountTag=$CF_AccountId2;TunnelID=$tunnelId;TunnelName="wdpmgr-tunnel";TunnelSecret=$secB64} `
+                | ConvertTo-Json | Set-Content "$cfCredDir\$tunnelId.json" -Encoding UTF8
+            # Write fresh config
+            @"
+tunnel: $tunnelId
+credentials-file: $($cfCredDir.Replace('\','/'))\$tunnelId.json
+ingress:
+  - service: http_status:404
+"@ | Set-Content $cfConfigFile -Encoding UTF8
+            $cfRaw = Get-Content $cfConfigFile -Raw
+            OK "New tunnel created: $tunnelId"
+        } else {
+            Warn "No tunnel ID in config and no API token — cannot create tunnel. Provide token next run."
+        }
+    }
+
+    # ── Add/update WdpMgr ingress entry (idempotent) ─────────────────────────
+    if ($cfRaw) {
+        $newEntry = "  - hostname: $CF_Hostname`n    service: http://localhost:$Port"
+        $lines    = ($cfRaw -replace "`r`n","`n") -split "`n"
+        $outLines = [System.Collections.Generic.List[string]]::new()
+        $skip     = $false
+        foreach ($line in $lines) {
+            if ($line -match "hostname:\s*$([regex]::Escape($CF_Hostname))") { $skip = $true; continue }
+            if ($skip -and $line -match "^\s+service:") { $skip = $false; continue }
+            if ($skip) { continue }
+            if ($line -match "^\s*-\s+service:\s+http_status") { $outLines.Add($newEntry) }
+            $outLines.Add($line)
+        }
+        # If no catch-all was found, append
+        if (-not ($outLines -join "`n" | Select-String "hostname:\s*$([regex]::Escape($CF_Hostname))")) {
+            $outLines.Add($newEntry)
+        }
+        ($outLines -join "`n").TrimEnd() | Set-Content $cfConfigFile -Encoding UTF8
+        OK "Ingress rule added/updated in $cfConfigFile"
+    }
+
+    # ── CNAME DNS record ──────────────────────────────────────────────────────
+    if ($CF_ApiToken -and $CF_ZoneId -and $tunnelId) {
+        $hdrs  = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
+        $cname = "$tunnelId.cfargotunnel.com"
+        $sub   = ($CF_Hostname -split '\.')[0]
+        $ex    = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_Hostname" `
+                     -Headers $hdrs -Method GET -EA SilentlyContinue
+        $rid   = $ex.result[0].id
+        $dns   = @{type="CNAME";name=$sub;content=$cname;proxied=$true} | ConvertTo-Json
+        if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns | Out-Null; OK "CNAME created → $CF_Hostname" }
+        else            { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns | Out-Null; OK "CNAME updated → $CF_Hostname" }
+    } elseif ($tunnelId) {
+        Warn "Add DNS manually: CNAME  $CF_Hostname  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
+    }
+
+    # ── Restart cloudflared service ───────────────────────────────────────────
+    $cfSvc = Get-Service "cloudflared" -EA SilentlyContinue
+    if ($cfSvc) {
+        Info "Restarting cloudflared service..."
+        if ($cfSvc.Status -eq "Running") { Stop-Service "cloudflared" -Force; Start-Sleep 2 }
+        Start-Service "cloudflared" -EA SilentlyContinue; Start-Sleep 3
+        $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
+        if ($cfSt -eq "Running") { OK "cloudflared restarted → https://$CF_FullDomain" }
+        else { Warn "cloudflared status: $cfSt — check: sc query cloudflared" }
+    } elseif ($cfExe) {
+        Info "Registering cloudflared as service..."
+        & $cfExe --config $cfConfigFile service install
+        Start-Service "cloudflared" -EA SilentlyContinue; Start-Sleep 3
+        $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
+        if ($cfSt -eq "Running") { OK "cloudflared installed and running → https://$CF_FullDomain" }
+        else { Warn "cloudflared service status: $cfSt" }
+    } else { Warn "Could not start cloudflared — run manually: cloudflared tunnel --config $cfConfigFile run" }
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────────

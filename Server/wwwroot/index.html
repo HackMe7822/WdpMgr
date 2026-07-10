@@ -104,6 +104,18 @@
     <!-- ── Settings ──────────────────────────────────────────────────────────── -->
     <section id="view-settings" class="view">
       <div class="page-header"><h1>Settings</h1></div>
+
+      <div class="settings-card" style="margin-bottom:18px">
+        <h3>Master Admin Key</h3>
+        <p class="hint">Used as <code>X-Admin-Key</code> header or as the master password (username: <code>master</code>) on login.</p>
+        <button class="btn-secondary" onclick="loadAdminKey()">Show Key</button>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+          <input type="password" id="adminkey-area" readonly placeholder="Click 'Show Key'…" style="margin-bottom:0;font-family:var(--mono);font-size:12px"/>
+          <button class="btn-icon" onclick="toggleAdminKey()" title="Show/hide">👁</button>
+          <button class="btn-icon" onclick="copyAdminKey()">Copy</button>
+        </div>
+      </div>
+
       <div class="settings-card">
         <h3>RSA Public Key</h3>
         <p class="hint">Copy this, run <code>tools\set-pubkey.bat</code> on your build machine, then recompile <code>WdpMgr.exe</code>.</p>
