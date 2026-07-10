@@ -117,6 +117,14 @@ OK "Repo extracted to $repoDir"
 # ── Build ──────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  ── Step 4/6: Building server ───────────────────────────────" -ForegroundColor DarkGray
+
+# Stop existing service first so the EXE is not locked during publish
+$existingSvc = Get-Service $ServiceName -ErrorAction SilentlyContinue
+if ($existingSvc -and $existingSvc.Status -eq "Running") {
+    Info "Stopping existing service to release EXE lock..."
+    Stop-Service $ServiceName -Force; Start-Sleep 2
+}
+
 $publishDir = "$InstallDir\app"
 Info "Publishing win-x64 self-contained binary..."
 & dotnet publish "$repoDir\Server\WdpMgrServer.csproj" `
@@ -360,6 +368,25 @@ ingress:
         if ($cfSt -eq "Running") { OK "cloudflared installed and running → https://$CF_FullDomain" }
         else { Warn "cloudflared service status: $cfSt" }
     } else { Warn "Could not start cloudflared — run manually: cloudflared tunnel --config $cfConfigFile run" }
+
+    # ── Manual DNS steps if token was skipped ────────────────────────────────
+    if (-not $CF_ApiToken -and $tunnelId) {
+        Write-Host ""
+        Write-Host "  ┌─ Manual DNS step required ────────────────────────────────┐" -ForegroundColor Yellow
+        Write-Host "  │  1. Go to dash.cloudflare.com → your domain → DNS         │" -ForegroundColor Yellow
+        Write-Host "  │  2. Add a new record:                                      │" -ForegroundColor Yellow
+        Write-Host "  │     Type   : CNAME                                         │" -ForegroundColor Yellow
+        Write-Host ("  │     Name   : " + ($CF_Hostname -split '\.')[0]).PadRight(60) + "│" -ForegroundColor Yellow
+        Write-Host ("  │     Target : $tunnelId.cfargotunnel.com").PadRight(61)        + "│" -ForegroundColor Yellow
+        Write-Host "  │     Proxy  : ON (orange cloud)                             │" -ForegroundColor Yellow
+        Write-Host "  │                                                             │" -ForegroundColor Yellow
+        Write-Host "  │  To create an API token for next time:                     │" -ForegroundColor Yellow
+        Write-Host "  │  dash.cloudflare.com → My Profile → API Tokens             │" -ForegroundColor Yellow
+        Write-Host "  │  → Create Token → Custom Token                             │" -ForegroundColor Yellow
+        Write-Host "  │  Permissions:  Zone / DNS / Edit                           │" -ForegroundColor Yellow
+        Write-Host "  │                Zone / Zone / Read                          │" -ForegroundColor Yellow
+        Write-Host "  └─────────────────────────────────────────────────────────────┘" -ForegroundColor Yellow
+    }
 }
 
 # ── Summary ────────────────────────────────────────────────────────────────────
