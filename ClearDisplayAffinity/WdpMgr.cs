@@ -893,9 +893,19 @@ namespace WdpMgr
             {
                 while (true)
                 {
-                    Thread.Sleep(TimeSpan.FromHours(24));
+                    // Check local expiry first (no server needed) for temp/hr licenses
+                    if (!string.IsNullOrEmpty(lic.Expiry) &&
+                        DateTime.TryParse(lic.Expiry, out var ed) &&
+                        ed.ToUniversalTime() < DateTime.UtcNow)
+                    {
+                        Log("License expired (local clock check) — self-removing");
+                        SelfDestruct();
+                        Environment.Exit(0);
+                    }
+
+                    // Server check-in
                     string status = CheckIn(lic);
-                    Log("License 24h check-in: " + status);
+                    Log("License check-in: " + status);
                     if (status == "expired"      || status == "revoked" ||
                         status == "wrong_machine" || status == "invalid")
                     {
@@ -903,6 +913,16 @@ namespace WdpMgr
                         SelfDestruct();
                         Environment.Exit(0);
                     }
+
+                    // Check every 5 minutes; down to 1 min when expiry is within 30 min
+                    TimeSpan interval = TimeSpan.FromMinutes(5);
+                    if (!string.IsNullOrEmpty(lic.Expiry) &&
+                        DateTime.TryParse(lic.Expiry, out var exp) &&
+                        (exp.ToUniversalTime() - DateTime.UtcNow).TotalMinutes < 30)
+                    {
+                        interval = TimeSpan.FromMinutes(1);
+                    }
+                    Thread.Sleep(interval);
                 }
             }) { IsBackground = true, Name = "LicenseLoop" };
             t.Start();
