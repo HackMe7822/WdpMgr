@@ -139,6 +139,16 @@ Write-Host "  ── Step 5/6: Windows Service ───────────
 $dataDir = "$InstallDir\data"
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory $dataDir -Force | Out-Null }
 
+# Auto-copy base WdpMgr.exe from repo into data dir so no manual upload is needed
+$clientExe = "$repoDir\ClearDisplayAffinity\WdpMgr.exe"
+$baseExeDst = "$dataDir\WdpMgr_base.exe"
+if (Test-Path $clientExe) {
+    Copy-Item $clientExe $baseExeDst -Force
+    OK "WdpMgr_base.exe copied from repo ($([math]::Round((Get-Item $baseExeDst).Length/1KB,1)) KB)"
+} else {
+    Warn "WdpMgr.exe not found in repo — upload it manually from Settings in the admin panel."
+}
+
 $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue
 if ($svc) {
     if ($svc.Status -eq "Running") { Stop-Service $ServiceName -Force }
