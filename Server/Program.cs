@@ -258,6 +258,12 @@ app.MapPost("/api/admin/machines/{id}/revoke", (HttpContext ctx, string id) => {
     DB.RevokeMachine(db, id);
     return Results.Json(new { ok = true });
 });
+app.MapPost("/api/admin/machines/{id}/activate", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.ActivateMachine(db, id);
+    return Results.Json(new { ok = true });
+});
 
 // ── Public key ────────────────────────────────────────────────────────────────
 app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
@@ -746,6 +752,12 @@ static class DB
     public static void RevokeMachine(SqliteConnection db, string id) {
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE machines SET status='revoked' WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void ActivateMachine(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET status='active' WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
     }
 

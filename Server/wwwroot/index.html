@@ -191,14 +191,14 @@
 <!-- ── Block License Modal ───────────────────────────────────────────────────── -->
 <div id="modal-revoke" class="modal-overlay hidden">
   <div class="modal modal-sm">
-    <div class="modal-header"><h2>Block License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
+    <div class="modal-header"><h2>Revoke License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
     <div class="modal-body">
-      <p>Block <strong id="rv-label"></strong>?</p>
+      <p>Revoke <strong id="rv-label"></strong>?</p>
       <p class="warn-text">All machines running this license will self-uninstall on next check-in. New installs of this EXE will also be rejected. Use Reactivate to undo.</p>
     </div>
     <div class="modal-footer">
       <button class="btn-ghost" onclick="closeModal('modal-revoke')">Cancel</button>
-      <button class="btn-danger" onclick="confirmRevoke()">Yes, Block</button>
+      <button class="btn-danger" onclick="confirmRevoke()">Yes, Revoke</button>
     </div>
   </div>
 </div>

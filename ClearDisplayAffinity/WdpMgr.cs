@@ -314,6 +314,46 @@ namespace WdpMgr
                 }
             }
 
+            // Pre-flight server check — catch revoked/expired/no-seats BEFORE installing
+            Cursor = Cursors.WaitCursor;
+            string preCheck = Program.CheckIn(lic);
+            Cursor = Cursors.Default;
+            Program.Log("Pre-flight CheckIn: " + preCheck);
+            if (preCheck == "revoked")
+            {
+                MessageBox.Show(
+                    "This license or machine has been revoked by your admin.\n\n" +
+                    "This EXE can no longer be used on this machine.\n" +
+                    "Contact your admin to get a new license EXE.",
+                    "Revoked", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (preCheck == "expired")
+            {
+                MessageBox.Show(
+                    "This license has expired on the server.\n\n" +
+                    "Ask your admin to extend the expiry, then re-download the EXE.",
+                    "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (preCheck == "wrong_machine")
+            {
+                MessageBox.Show(
+                    "Max machines/seats reached for this license.\n\n" +
+                    "Contact your admin to increase the seat limit or get a new license.",
+                    "No Seats Available", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (preCheck == "invalid")
+            {
+                MessageBox.Show(
+                    "Server rejected this license as invalid.\n\n" +
+                    "Try re-downloading the EXE from the admin panel.\n\nLog: " + Program.LogPath,
+                    "License Invalid", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            // preCheck == "offline" → server temporarily unreachable; allow install and let the service retry
+
             // Auto-remove any leftover stopped service entry before fresh install
             if (Program.GetServiceStatus() != "Not installed")
             {
