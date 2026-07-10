@@ -605,11 +605,11 @@ static class DB
             string dispExpiry = "";
             if (!revoked) {
                 if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ex))
-                    daysLeft = (int)(ex - DateTime.UtcNow).TotalMinutes;
+                    daysLeft = (int)(ex.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
                 else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
                     daysLeft = (int)(adx.AddHours(durDays) - DateTime.UtcNow).TotalMinutes;
                 else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hex))
-                    daysLeft = (int)(hex - DateTime.UtcNow).TotalMinutes;
+                    daysLeft = (int)(hex.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
             }
             if ((licType == "temp" || licType == "hr") && !string.IsNullOrEmpty(expiry))
                 dispExpiry = expiry.Replace("T", " ");
