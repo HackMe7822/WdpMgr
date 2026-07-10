@@ -35,6 +35,11 @@ namespace WdpMgr
         }
         private void Worker()
         {
+            try { WorkerInner(); }
+            catch (Exception ex) { Program.Log("WORKER CRASH: " + ex.GetType().Name + " — " + ex.Message + "\n" + ex.StackTrace); }
+        }
+        private void WorkerInner()
+        {
             Program.Log("=== Service worker started, PID=" + Process.GetCurrentProcess().Id + " ===");
 
             // License validation before starting
@@ -85,10 +90,12 @@ namespace WdpMgr
             }
             while (!_stop)
             {
-                // Use process-snapshot enumeration — EnumWindows only sees Session-0
-                // windows when running as a service, missing all user-session processes.
-                int n = Program.InjectAllByProcess(Program.DllPath);
-                if (n > 0) Program.Log("Injected " + n + " new process(es) this cycle");
+                try
+                {
+                    int n = Program.InjectAllByProcess(Program.DllPath);
+                    if (n > 0) Program.Log("Injected " + n + " new process(es) this cycle");
+                }
+                catch (Exception ex) { Program.Log("InjectAllByProcess error: " + ex.GetType().Name + " — " + ex.Message); }
                 for (int i = 0; i < 20 && !_stop; i++) Thread.Sleep(100);
             }
             Program.Log("Service worker stopped");
