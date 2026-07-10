@@ -1314,7 +1314,15 @@ namespace WdpMgr
         internal static bool InstallService(out string error)
         {
             error = null;
-            string exe = "\"" + (Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "") + "\"";
+            string src = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+            // Copy EXE to ProgramData so SYSTEM account can always read it,
+            // regardless of where the user saved the downloaded file.
+            string dest = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WdpMgr.exe");
+            try { File.Copy(src, dest, overwrite: true); }
+            catch (Exception ex) { error = "Failed to copy EXE to system path: " + ex.Message; return false; }
+
+            string exe = "\"" + dest + "\"";
             if (!RunSc("create WdpMgr binPath= " + exe + " start= auto DisplayName= \"Windows Display Policy Manager\" obj= LocalSystem"))
             { error = "sc create failed. Make sure you are running as Administrator."; return false; }
             RunSc("description WdpMgr \"Manages display policy parameters for Windows desktop sessions.\"");
@@ -1327,6 +1335,13 @@ namespace WdpMgr
             RunSc("stop WdpMgr");
             Thread.Sleep(1200);
             RunSc("delete WdpMgr");
+            try
+            {
+                string dest = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WdpMgr.exe");
+                if (File.Exists(dest)) File.Delete(dest);
+            }
+            catch { }
         }
 
         private static bool RunSc(string args)
