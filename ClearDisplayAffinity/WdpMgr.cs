@@ -133,6 +133,11 @@ namespace WdpMgr
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = BG;
             Font            = new Font("Segoe UI", 9f);
+            try {
+                using var s = System.Reflection.Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("WdpMgr.app.ico");
+                if (s != null) Icon = new Icon(s);
+            } catch { }
 
             // --- Description ------------------------------------------------
             var desc = new Label
