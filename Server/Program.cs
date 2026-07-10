@@ -340,15 +340,10 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         if (!string.IsNullOrEmpty(lic.AppId) && !string.IsNullOrEmpty(appId) && lic.AppId != appId)
             return Results.Json(new { status="invalid", message="app mismatch" });
 
-        // HR type: seat key = fingerprint+windowsUser
-        string seatKey = lic.Type == "hr" ? $"{fp}|{winUser}" : fp;
+        // Seat key is always fingerprint — one seat per physical machine regardless of Windows user
+        string seatKey = fp;
 
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
-        // HR: service runs as SYSTEM so WMI returns empty/unknown winUser → different seatKey.
-        // Fall back to any row with the same fingerprint prefix so the service reuses the
-        // seat registered during the GUI pre-flight instead of consuming a second slot.
-        if (machine == null && lic.Type == "hr" && (string.IsNullOrEmpty(winUser) || winUser == "unknown"))
-            machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
         if (machine == null) {
             int cur = DB.GetActivationCount(db, licId);
             if (lic.MaxActivations > 0 && cur >= lic.MaxActivations)
