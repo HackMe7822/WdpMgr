@@ -71,15 +71,23 @@ function doLogout() {
   document.getElementById('login-error').textContent = '';
 }
 
-// ── Navigation ────────────────────────────────────────────────────────────────
+// ── Navigation + auto-refresh ─────────────────────────────────────────────────
+let currentView = 'dashboard';
+let _autoRefreshTimer = null;
+
 function nav(name, el) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
   if (el)  el.classList.add('active');
-  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, apps: loadApps, users: loadUsers, settings: loadSettings };
+  currentView = name;
+  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, users: loadUsers, settings: loadSettings };
   if (loaders[name]) loaders[name]();
+  clearInterval(_autoRefreshTimer);
+  if (name === 'licenses' || name === 'machines') {
+    _autoRefreshTimer = setInterval(() => { if (currentView === 'licenses') loadLicenses(); else if (currentView === 'machines') loadMachines(); }, 30000);
+  }
 }
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -106,7 +114,6 @@ function loadDashboard() {
     document.getElementById('s-expired').textContent = d.expiredLicenses;
     document.getElementById('s-revoked').textContent = d.revokedLicenses;
     document.getElementById('s-machines').textContent= d.activeMachines;
-    document.getElementById('s-apps').textContent    = d.totalApps;
     document.getElementById('s-users').textContent   = d.totalAdminUsers;
   }).catch(e => toast(e.message, true));
 
@@ -257,34 +264,6 @@ function renderMachines(list) {
 }
 
 // ── Apps ──────────────────────────────────────────────────────────────────────
-function loadApps() {
-  api('GET','/api/admin/apps').then(list => {
-    const tbody = document.getElementById('apps-body');
-    if (!list.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No apps registered yet.</td></tr>'; return; }
-    tbody.innerHTML = list.map(a => `<tr>
-      <td><strong>${e(a.name)}</strong></td>
-      <td class="muted">${e(a.description||'—')}</td>
-      <td class="muted">${e(a.createdAt)}</td>
-      <td><button class="btn-icon danger" onclick='deleteApp("${a.id}","${e(a.name)}")'>✕ Delete</button></td>
-    </tr>`).join('');
-  }).catch(e2 => toast(e2.message, true));
-}
-
-function createApp() {
-  const name = document.getElementById('na-name').value.trim();
-  const desc = document.getElementById('na-desc').value.trim();
-  if (!name) { toast('Name required', true); return; }
-  api('POST','/api/admin/apps',{name,description:desc}).then(()=>{
-    closeModal('modal-app'); toast('App registered'); loadApps();
-  }).catch(e2 => toast(e2.message, true));
-}
-
-function deleteApp(id, name) {
-  if (!confirm(`Delete app "${name}"?`)) return;
-  api('DELETE',`/api/admin/apps/${id}`).then(()=>{ toast('App deleted'); loadApps(); })
-    .catch(e2 => toast(e2.message, true));
-}
-
 // ── Admin Users ───────────────────────────────────────────────────────────────
 function loadUsers() {
   api('GET','/api/admin/users').then(list => {
@@ -296,6 +275,7 @@ function loadUsers() {
       <td class="muted">${e(u.createdAt)}</td>
       <td class="muted">${e(u.lastLogin||'Never')}</td>
       <td>
+        <button class="btn-icon" onclick='changePassword("${u.id}","${e(u.username)}")'>🔑 Change Pwd</button>
         <button class="btn-icon" onclick='resetKey("${u.id}","${e(u.username)}")'>⟳ Reset Key</button>
         <button class="btn-icon danger" onclick='deleteUser("${u.id}","${e(u.username)}")'>✕</button>
       </td></tr>`).join('');
@@ -324,6 +304,21 @@ function resetKey(id, name) {
   if (!confirm(`Reset API key for "${name}"?`)) return;
   api('POST',`/api/admin/users/${id}/reset-key`).then(d => {
     toast(`New API key for ${name}: ${d.apiKey}`);
+  }).catch(e2 => toast(e2.message, true));
+}
+
+let _chgPwdId = '';
+function changePassword(id, name) {
+  _chgPwdId = id;
+  document.getElementById('chgpwd-name').textContent = name;
+  document.getElementById('chgpwd-pass').value = '';
+  openModal('modal-chgpwd');
+}
+function submitChangePassword() {
+  const pass = document.getElementById('chgpwd-pass').value;
+  if (!pass) { toast('Password required', true); return; }
+  api('POST',`/api/admin/users/${_chgPwdId}/change-password`,{password:pass}).then(()=>{
+    closeModal('modal-chgpwd'); toast('Password changed');
   }).catch(e2 => toast(e2.message, true));
 }
 

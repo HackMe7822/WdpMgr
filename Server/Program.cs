@@ -94,6 +94,16 @@ app.MapPost("/api/admin/users/{id}/reset-key", (HttpContext ctx, string id) => {
     return Results.Json(new { apiKey = newKey });
 });
 
+app.MapPost("/api/admin/users/{id}/change-password", async (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string newPass = S(doc.RootElement, "password");
+    if (string.IsNullOrWhiteSpace(newPass)) return Results.Json(new { error = "password required" }, statusCode: 400);
+    using var db = DB.Open(dbPath);
+    DB.ChangePassword(db, id, newPass);
+    return Results.Json(new { ok = true });
+});
+
 // ── Apps management ───────────────────────────────────────────────────────────
 app.MapGet("/api/admin/apps", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
@@ -541,6 +551,14 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE admin_users SET api_key=$k WHERE id=$id";
         c.Parameters.AddWithValue("$k", newKey); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
+    }
+
+    public static void ChangePassword(SqliteConnection db, string id, string newPassword) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE admin_users SET password_hash=$h WHERE id=$id";
+        c.Parameters.AddWithValue("$h", HashPassword(newPassword));
+        c.Parameters.AddWithValue("$id", id);
         c.ExecuteNonQuery();
     }
 

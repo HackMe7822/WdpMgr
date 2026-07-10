@@ -37,7 +37,6 @@
       <li class="nav-item active" data-view="dashboard" onclick="nav('dashboard',this)"><i data-icon="grid"></i>Dashboard</li>
       <li class="nav-item" data-view="licenses"  onclick="nav('licenses',this)"><i data-icon="file"></i>Licenses</li>
       <li class="nav-item" data-view="machines"  onclick="nav('machines',this)"><i data-icon="monitor"></i>Machines</li>
-      <li class="nav-item" data-view="apps"      onclick="nav('apps',this)"><i data-icon="box"></i>Apps / DLLs</li>
       <li class="nav-item" data-view="users"     onclick="nav('users',this)"><i data-icon="users"></i>Admin Users</li>
       <li class="nav-item" data-view="settings"  onclick="nav('settings',this)"><i data-icon="settings"></i>Settings</li>
     </ul>
@@ -58,7 +57,6 @@
         <div class="stat-card accent-a" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Expired</div>         <div class="stat-value" id="s-expired">—</div></div>
         <div class="stat-card accent-r" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Revoked</div>         <div class="stat-value" id="s-revoked">—</div></div>
         <div class="stat-card accent-b" style="cursor:pointer" onclick="nav('machines',document.querySelector('[data-view=machines]'))"><div class="stat-label">Active Seats</div>   <div class="stat-value" id="s-machines">—</div></div>
-        <div class="stat-card"          style="cursor:pointer" onclick="nav('apps',document.querySelector('[data-view=apps]'))">        <div class="stat-label">Apps Registered</div><div class="stat-value" id="s-apps">—</div></div>
         <div class="stat-card"          style="cursor:pointer" onclick="nav('users',document.querySelector('[data-view=users]'))">      <div class="stat-label">Admin Users</div>    <div class="stat-value" id="s-users">—</div></div>
       </div>
       <div class="section-header"><h2>Recent Machines</h2><a href="#" class="link-more" onclick="nav('machines',document.querySelector('[data-view=machines]'));return false">View all →</a></div>
@@ -82,15 +80,6 @@
       <table class="data-table">
         <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>Time Left</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="mach-body"></tbody>
-      </table>
-    </section>
-
-    <!-- ── Apps ──────────────────────────────────────────────────────────────── -->
-    <section id="view-apps" class="view">
-      <div class="page-header"><h1>Apps / DLLs</h1><button class="btn-primary" onclick="openModal('modal-app')">+ Register App</button></div>
-      <table class="data-table">
-        <thead><tr><th>Name</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead>
-        <tbody id="apps-body"></tbody>
       </table>
     </section>
 
@@ -205,23 +194,6 @@
   </div>
 </div>
 
-<!-- ── Register App Modal ─────────────────────────────────────────────────────── -->
-<div id="modal-app" class="modal-overlay hidden">
-  <div class="modal modal-sm">
-    <div class="modal-header"><h2>Register App</h2><button class="modal-close" onclick="closeModal('modal-app')">✕</button></div>
-    <div class="modal-body">
-      <label>App Name <span class="req">*</span></label>
-      <input type="text" id="na-name" placeholder="e.g. WdpMgr v2, MyTool.exe"/>
-      <label>Description</label>
-      <input type="text" id="na-desc" placeholder="Optional description"/>
-    </div>
-    <div class="modal-footer">
-      <button class="btn-ghost" onclick="closeModal('modal-app')">Cancel</button>
-      <button class="btn-primary" onclick="createApp()">Register</button>
-    </div>
-  </div>
-</div>
-
 <!-- ── Add Admin User Modal ───────────────────────────────────────────────────── -->
 <div id="modal-user" class="modal-overlay hidden">
   <div class="modal modal-sm">
@@ -241,7 +213,23 @@
   </div>
 </div>
 
+<!-- ── Change Password Modal ──────────────────────────────────────────────────── -->
+<div id="modal-chgpwd" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Change Password</h2><button class="modal-close" onclick="closeModal('modal-chgpwd')">✕</button></div>
+    <div class="modal-body">
+      <p>Set new password for <strong id="chgpwd-name"></strong></p>
+      <label>New Password <span class="req">*</span></label>
+      <input type="password" id="chgpwd-pass" placeholder="New password"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-chgpwd')">Cancel</button>
+      <button class="btn-primary" onclick="submitChangePassword()">Save</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=14"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>
