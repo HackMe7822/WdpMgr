@@ -202,11 +202,21 @@ function renderMachines(list) {
     if (m.licenseType === 'lifetime' || m.daysLeft === null || m.daysLeft === undefined) {
       timeLeft = '<span style="color:var(--green)">∞</span>';
     } else if (typeof m.daysLeft === 'number') {
-      if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
-      else {
-        const label = fmtMins(m.daysLeft); // daysLeft is now minutes remaining
-        const warn  = m.daysLeft <= 2880;  // amber when <= 48h remaining
-        timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;
+      if (m.daysLeft < 0) {
+        // Show actual expiry date alongside Expired label
+        const expStr = m.expiryDisplay ? ' (' + m.expiryDisplay + ')' : '';
+        timeLeft = `<span style="color:var(--red)">Expired${expStr}</span>`;
+      } else {
+        const warn = m.daysLeft <= 2880; // amber when <= 48h remaining
+        const color = warn ? 'var(--amber)' : 'var(--green)';
+        if (m.daysLeft >= 2880 && m.expiryDisplay) {
+          // More than 48h left — show actual date, time remaining in tooltip
+          timeLeft = `<span style="color:${color}" title="${fmtMins(m.daysLeft)} remaining">${m.expiryDisplay}</span>`;
+        } else {
+          // Under 48h — show countdown, date in tooltip
+          const title = m.expiryDisplay ? ` title="Expires ${m.expiryDisplay}"` : '';
+          timeLeft = `<span style="color:${color}"${title}>${fmtMins(m.daysLeft)}</span>`;
+        }
       }
     }
     return `<tr>

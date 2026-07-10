@@ -359,7 +359,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         if (lic.Type == "days" && !string.IsNullOrEmpty(lic.ActivatedAt) && DateTime.TryParse(lic.ActivatedAt, out var act))
             extra = new { hoursRemaining = (int)(act.AddHours(lic.DurationDays) - DateTime.UtcNow).TotalHours };
 
-        return Results.Json(new { status="ok", licenseType=lic.Type, extra });
+        return Results.Json(new { status="ok", licenseType=lic.Type, expiry=lic.Expiry, durationDays=lic.DurationDays, activatedAt=lic.ActivatedAt, extra });
     }
     catch (Exception ex) {
         Console.WriteLine($"[ERR] checkin: {ex.Message}");
@@ -698,13 +698,19 @@ static class DB
                 daysLeft = (int)(ad.AddHours(durDays) - DateTime.UtcNow).TotalMinutes;
             else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hred))
                 daysLeft = (int)(hred.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
+            // Compute display expiry string for expiry-based types
+            string dispExpiry = "";
+            if ((licType == "temp" || licType == "hr") && !string.IsNullOrEmpty(expiry))
+                dispExpiry = expiry.Replace("T", " ");
+            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
+                dispExpiry = adx.AddHours(durDays).ToString("yyyy-MM-dd HH:mm");
             list.Add(new {
                 id=r.GetString(0), licenseId=r.GetString(1),
                 licenseLabel=r.IsDBNull(2)?"":r.GetString(2),
                 seatKey=r.GetString(3), hostname=r.GetString(4),
                 windowsUser=r.GetString(5), ipAddress=r.GetString(6),
                 firstSeen=r.GetString(7), lastSeen=r.GetString(8), status=r.GetString(9),
-                licenseType=licType, daysLeft
+                licenseType=licType, daysLeft, expiryDisplay=dispExpiry
             });
         }
         return list;
@@ -831,7 +837,7 @@ static class RsaSvc
 
     public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl) {
         // Payload includes durationDays so client can validate days-type locally
-        string payload = $"{lic.Id}|{lic.Type}|{lic.Expiry}|{lic.Issued}|{lic.DurationDays}";
+        string payload = lic.Id;
         var parms = XmlToParams(GetPrivKeyXml(db), true);
         using var rsa = RSA.Create(); rsa.ImportParameters(parms);
         byte[] sig = rsa.SignData(Encoding.UTF8.GetBytes(payload), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);

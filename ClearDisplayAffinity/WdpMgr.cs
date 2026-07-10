@@ -250,12 +250,25 @@ namespace WdpMgr
             bool hasLic = Program.ReadLicense(out lic);
             bool sigOk  = hasLic && Program.VerifyLicense(lic);
             string licInfo;
-            if (!hasLic)             licInfo = "License: NOT FOUND";
-            else if (!sigOk)         licInfo = "License: INVALID SIGNATURE";
-            else if (lic.Type == "temp")  licInfo = "License: Temp — expires " + lic.Expiry.Replace("T", " ");
-            else if (lic.Type == "days")  licInfo = "License: Days — " + lic.DurationDays + "h from activation";
-            else if (lic.Type == "hr")    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(lic.Expiry) ? "" : " — until " + lic.Expiry.Replace("T", " "));
-            else                          licInfo = "License: Lifetime";
+            if (!hasLic)     licInfo = "License: NOT FOUND";
+            else if (!sigOk) licInfo = "License: INVALID SIGNATURE";
+            else
+            {
+                // Prefer live values from server (written by check-in loop) over embedded
+                string stType, stExpiry, stDur;
+                bool hasState = Program.ReadState(out stType, out stExpiry, out stDur);
+                string dispType   = hasState && !string.IsNullOrEmpty(stType)   ? stType   : lic.Type;
+                string dispExpiry = hasState && !string.IsNullOrEmpty(stExpiry) ? stExpiry : (lic.Expiry ?? "");
+                string dispDur    = hasState && !string.IsNullOrEmpty(stDur)    ? stDur    : (lic.DurationDays ?? "");
+                if (dispType == "temp")
+                    licInfo = "License: Temp — expires " + dispExpiry.Replace("T", " ");
+                else if (dispType == "days")
+                    licInfo = "License: Days — " + dispDur + "h from activation";
+                else if (dispType == "hr")
+                    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(dispExpiry) ? "" : " — until " + dispExpiry.Replace("T", " "));
+                else
+                    licInfo = "License: Lifetime";
+            }
 
             _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
         }
@@ -303,21 +316,6 @@ namespace WdpMgr
                     "Details: " + Program.LogPath,
                     "Invalid License", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return;
-            }
-
-            // Fast-fail if the embedded expiry has already passed
-            if (!string.IsNullOrEmpty(lic.Expiry))
-            {
-                DateTime expDt;
-                if (DateTime.TryParse(lic.Expiry, out expDt) && expDt.ToUniversalTime() < DateTime.UtcNow)
-                {
-                    Program.Log("DoInstall: license expired at " + lic.Expiry);
-                    MessageBox.Show(
-                        "This license expired on " + expDt.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + ".\n\n" +
-                        "Ask your admin to extend the license, then re-download the EXE from the admin panel.",
-                        "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
             }
 
             // Pre-flight server check — catch revoked/expired/no-seats BEFORE installing
@@ -922,7 +920,7 @@ namespace WdpMgr
             if (pubKeyXml == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true; // dev mode
             try
             {
-                string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued + "|" + (lic.DurationDays ?? "0");
+                string payload = lic.Id;
                 byte[] data    = Encoding.UTF8.GetBytes(payload);
                 byte[] sig     = Convert.FromBase64String(lic.Sig);
                 using (var rsa = new RSACryptoServiceProvider())
@@ -933,6 +931,52 @@ namespace WdpMgr
                 }
             }
             catch (Exception ex) { Log("VerifyLicense exception: " + ex.GetType().Name + " — " + ex.Message); return false; }
+        }
+
+        private static string ParseJsonField(string json, string key)
+        {
+            string search = "\"" + key + "\":";
+            int idx = json.IndexOf(search);
+            if (idx < 0) return null;
+            int start = idx + search.Length;
+            while (start < json.Length && (json[start] == ' ' || json[start] == '\t')) start++;
+            if (start >= json.Length) return null;
+            if (json[start] == '"')
+            {
+                int end = json.IndexOf('"', start + 1);
+                return end > start ? json.Substring(start + 1, end - start - 1) : null;
+            }
+            int eend = start;
+            while (eend < json.Length && json[eend] != ',' && json[eend] != '}' && json[eend] != '\n') eend++;
+            string val = json.Substring(start, eend - start).Trim();
+            return (val == "null" || val == "") ? null : val;
+        }
+
+        internal static void WriteState(string type, string expiry, string durDays)
+        {
+            try { File.WriteAllText(StatePath,
+                "type=" + type + "\r\nexpiry=" + expiry + "\r\ndurationDays=" + durDays + "\r\n"); }
+            catch { }
+        }
+
+        internal static bool ReadState(out string type, out string expiry, out string durDays)
+        {
+            type = expiry = durDays = "";
+            if (!File.Exists(StatePath)) return false;
+            try
+            {
+                foreach (string line in File.ReadAllLines(StatePath))
+                {
+                    int eq = line.IndexOf('='); if (eq < 0) continue;
+                    string k = line.Substring(0, eq).Trim();
+                    string v = line.Substring(eq + 1).Trim();
+                    if (k == "type")         type    = v;
+                    else if (k == "expiry")       expiry  = v;
+                    else if (k == "durationDays") durDays = v;
+                }
+                return !string.IsNullOrEmpty(type);
+            }
+            catch { return false; }
         }
 
         internal static string CheckIn(LicenseData lic)
@@ -951,14 +995,23 @@ namespace WdpMgr
                 wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
                 wc.Encoding = Encoding.UTF8;
                 string resp = wc.UploadString(lic.Server.TrimEnd('/') + "/api/checkin", json);
+                string status = "ok";
                 int si = resp.IndexOf("\"status\":");
                 if (si >= 0)
                 {
                     int q1 = resp.IndexOf('"', si + 9);
                     int q2 = q1 >= 0 ? resp.IndexOf('"', q1 + 1) : -1;
-                    if (q1 >= 0 && q2 > q1) return resp.Substring(q1 + 1, q2 - q1 - 1);
+                    if (q1 >= 0 && q2 > q1) status = resp.Substring(q1 + 1, q2 - q1 - 1);
                 }
-                return "ok";
+                if (status == "ok")
+                {
+                    string liveType   = ParseJsonField(resp, "licenseType") ?? "";
+                    string liveExpiry = ParseJsonField(resp, "expiry") ?? "";
+                    string liveDur    = ParseJsonField(resp, "durationDays") ?? "";
+                    if (!string.IsNullOrEmpty(liveType))
+                        WriteState(liveType, liveExpiry, liveDur);
+                }
+                return status;
             }
             catch { return "offline"; }
         }
@@ -1037,6 +1090,10 @@ namespace WdpMgr
 
         internal static readonly string LogPath =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WdpMgr.log");
+
+        internal static readonly string StatePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+            "WdpMgr.state");
 
         internal static void Log(string msg)
         {
@@ -1215,6 +1272,7 @@ namespace WdpMgr
             // Delete all ProgramData artifacts including logs
             try { File.Delete(DllPath); } catch { }
             try { File.Delete(LogPath); } catch { }
+            try { File.Delete(StatePath); } catch { }
             try { File.Delete(Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
                     "WdpCore.log")); } catch { }
