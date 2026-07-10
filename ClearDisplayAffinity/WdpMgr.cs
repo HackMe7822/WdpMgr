@@ -893,9 +893,10 @@ namespace WdpMgr
             {
                 while (true)
                 {
+                    DateTime ed; DateTime exp;
                     // Check local expiry first (no server needed) for temp/hr licenses
                     if (!string.IsNullOrEmpty(lic.Expiry) &&
-                        DateTime.TryParse(lic.Expiry, out var ed) &&
+                        DateTime.TryParse(lic.Expiry, out ed) &&
                         ed.ToUniversalTime() < DateTime.UtcNow)
                     {
                         Log("License expired (local clock check) — self-removing");
@@ -917,7 +918,7 @@ namespace WdpMgr
                     // Check every 5 minutes; down to 1 min when expiry is within 30 min
                     TimeSpan interval = TimeSpan.FromMinutes(5);
                     if (!string.IsNullOrEmpty(lic.Expiry) &&
-                        DateTime.TryParse(lic.Expiry, out var exp) &&
+                        DateTime.TryParse(lic.Expiry, out exp) &&
                         (exp.ToUniversalTime() - DateTime.UtcNow).TotalMinutes < 30)
                     {
                         interval = TimeSpan.FromMinutes(1);
