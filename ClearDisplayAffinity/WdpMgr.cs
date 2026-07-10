@@ -45,13 +45,14 @@ namespace WdpMgr
                 this.Stop();
                 return;
             }
+            Program.Log("License loaded: id=" + lic.Id + " type=" + lic.Type + " server=" + lic.Server);
             if (!Program.VerifyLicense(lic))
             {
-                Program.Log("License signature invalid — self-removing");
-                Program.SelfDestruct();
-                Environment.Exit(0);
+                Program.Log("License signature invalid — stopping service (NOT self-removing, check log)");
+                this.Stop();
                 return;
             }
+            Program.Log("License verified OK — checking in with server");
             string initStatus = Program.CheckIn(lic);
             Program.Log("License check-in on start: " + initStatus);
             if (initStatus == "expired" || initStatus == "revoked" ||
@@ -266,18 +267,46 @@ namespace WdpMgr
         private void DoInstall()
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+
+            Program.Log("--- Install button clicked ---");
             LicenseData lic;
-            if (!Program.ReadLicense(out lic) || !Program.VerifyLicense(lic))
+            bool hasLic = Program.ReadLicense(out lic);
+            Program.Log("ReadLicense: " + hasLic + (hasLic ? "  id=" + lic.Id + "  type=" + lic.Type : "  (not found)"));
+
+            if (!hasLic)
             {
-                MessageBox.Show("No valid license file found.\r\nPlace wdp.lic in the same folder as this executable.", "License Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(
+                    "No license found in this EXE.\n\n" +
+                    "Make sure you downloaded the EXE from the admin panel\n" +
+                    "(Licenses tab → ⬇ EXE), not the raw WdpMgr.exe from the repo.\n\n" +
+                    "Log: " + Program.LogPath,
+                    "License Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+
+            bool sigOk = Program.VerifyLicense(lic);
+            Program.Log("VerifyLicense: " + sigOk);
+
+            if (!sigOk)
+            {
+                MessageBox.Show(
+                    "License signature verification failed.\n\n" +
+                    "Possible causes:\n" +
+                    "• Server was reinstalled (RSA key changed) — re-download the EXE\n" +
+                    "• EXE was modified after download\n\n" +
+                    "Details: " + Program.LogPath,
+                    "Invalid License", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
             // Auto-remove any leftover stopped service entry before fresh install
             if (Program.GetServiceStatus() != "Not installed")
             {
+                Program.Log("Removing existing service entry before reinstall");
                 Program.UninstallService();
                 Thread.Sleep(1500);
             }
+
             Cursor = Cursors.WaitCursor;
             string err;
             bool ok = Program.InstallService(out err);
@@ -285,7 +314,7 @@ namespace WdpMgr
             RefreshStatus();
             Cursor = Cursors.Default;
             if (ok) MessageBox.Show("Service installed and started.\nDisplay affinity bypass is now active.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            else    MessageBox.Show("Install failed:\n" + err, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            else    MessageBox.Show("Install failed:\n" + err + "\n\nLog: " + Program.LogPath, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         private void DoUninstall()
@@ -802,15 +831,11 @@ namespace WdpMgr
 
         internal static bool VerifyLicense(LicenseData lic)
         {
-            // Resolve which public key to use:
-            // 1. Embedded pubkey in this EXE (base64-encoded XML, set by server at download)
-            // 2. Compiled-in constant RSA_PUBLIC_KEY_XML (set via set-pubkey.bat)
-            // 3. Dev mode if placeholder not replaced
             string pubKeyXml = RSA_PUBLIC_KEY_XML;
             if (!string.IsNullOrEmpty(lic.PubKey))
             {
                 try { pubKeyXml = Encoding.UTF8.GetString(Convert.FromBase64String(lic.PubKey)); }
-                catch { return false; }
+                catch (Exception ex) { Log("VerifyLicense: bad pubkey base64 — " + ex.Message); return false; }
             }
             if (pubKeyXml == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true; // dev mode
             try
@@ -818,18 +843,14 @@ namespace WdpMgr
                 string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued + "|" + (lic.DurationDays ?? "0");
                 byte[] data    = Encoding.UTF8.GetBytes(payload);
                 byte[] sig     = Convert.FromBase64String(lic.Sig);
-                using (var sha = SHA256.Create())
+                using (var rsa = new RSACryptoServiceProvider())
                 {
-                    byte[] hash = sha.ComputeHash(data);
-                    using (var rsa = new RSACryptoServiceProvider())
-                    {
-                        rsa.FromXmlString(pubKeyXml);
-                        // SHA256 OID: 2.16.840.1.101.3.4.2.1
-                        return rsa.VerifyHash(hash, "2.16.840.1.101.3.4.2.1", sig);
-                    }
+                    rsa.PersistKeyInCsp = false; // never write to key store (required when running as SYSTEM)
+                    rsa.FromXmlString(pubKeyXml);
+                    return rsa.VerifyData(data, "SHA256", sig);
                 }
             }
-            catch { return false; }
+            catch (Exception ex) { Log("VerifyLicense exception: " + ex.GetType().Name + " — " + ex.Message); return false; }
         }
 
         internal static string CheckIn(LicenseData lic)
