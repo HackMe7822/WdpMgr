@@ -184,6 +184,12 @@ app.MapPost("/api/admin/licenses/{id}/reactivate", (HttpContext ctx, string id) 
     DB.ReactivateLicense(db, id);
     return Results.Json(new { ok = true });
 });
+app.MapPost("/api/admin/licenses/{id}/block", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.RevokeLicense(db, id);
+    return Results.Json(new { ok = true });
+});
 app.MapDelete("/api/admin/licenses/{id}/purge", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
@@ -215,8 +221,10 @@ app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => 
     if (!File.Exists(baseExePath))
         return Results.Json(new { error = "Base WdpMgr.exe not uploaded yet. Go to Settings → Upload EXE." }, statusCode: 400);
     string serverUrl = DB.GetSetting(db, "server_url");
-    if (string.IsNullOrEmpty(serverUrl))
-        serverUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+    if (string.IsNullOrEmpty(serverUrl)) {
+        string proto = ctx.Request.Headers.TryGetValue("X-Forwarded-Proto", out var xfp2) ? xfp2.ToString() : ctx.Request.Scheme;
+        serverUrl = $"{proto}://{ctx.Request.Host}";
+    }
     byte[] bundled = RsaSvc.GenerateBundledExe(db, lic, serverUrl, File.ReadAllBytes(baseExePath));
     string fname = "WdpMgr_" + new string(lic.Label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray()) + ".exe";
     return Results.File(bundled, "application/octet-stream", fname);
@@ -333,7 +341,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
                 return Results.Json(new { status="wrong_machine", message="max activations reached" });
             // First activation of a days-license: record activated_at
             if (lic.Type == "days" && string.IsNullOrEmpty(lic.ActivatedAt))
-                DB.SetActivatedAt(db, licId, DateTime.UtcNow.ToString("yyyy-MM-dd"));
+                DB.SetActivatedAt(db, licId, DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
             DB.CreateMachine(db, Guid.NewGuid().ToString(), licId, seatKey, host, winUser, ip);
         } else {
             if (machine.Status == "revoked") return Results.Json(new { status="revoked" });
@@ -696,7 +704,7 @@ static class DB
 
     public static MachineRow? GetMachineByLicAndSeat(SqliteConnection db, string licId, string seatKey) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$sk OR seat_key='') LIMIT 1";
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;

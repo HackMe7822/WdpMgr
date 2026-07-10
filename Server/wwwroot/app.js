@@ -151,7 +151,7 @@ function loadLicenses() {
           ${!l.revoked
             ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
                <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}")'>✏</button>
-               <button class="btn-icon danger" onclick='openRevoke("${l.id}","${e(l.label)}")'>✕ Revoke</button>
+               <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Block</button>
                <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
             : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
                <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑 Delete</button>`
@@ -359,15 +359,15 @@ function saveLicenseEdit() {
   }).catch(e2 => toast(e2.message, true));
 }
 
-function openRevoke(id, label) {
+function openBlock(id, label) {
   revokeId = id; revokeLabel_ = label;
   document.getElementById('rv-label').textContent = label;
   openModal('modal-revoke');
 }
 
 function confirmRevoke() {
-  api('DELETE',`/api/admin/licenses/${revokeId}`).then(()=>{
-    closeModal('modal-revoke'); toast('License revoked'); loadLicenses(); loadDashboard();
+  api('POST',`/api/admin/licenses/${revokeId}/block`).then(()=>{
+    closeModal('modal-revoke'); toast('License blocked — all machines will self-remove on next check-in'); loadLicenses(); loadDashboard();
   }).catch(e2 => toast(e2.message, true));
 }
 

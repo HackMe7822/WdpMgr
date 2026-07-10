@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>WdpMgr Admin</title>
-  <link rel="stylesheet" href="style.css?v=6"/>
+  <link rel="stylesheet" href="style.css?v=7"/>
 </head>
 <body>
 
@@ -188,17 +188,17 @@
   </div>
 </div>
 
-<!-- ── Revoke License Modal ──────────────────────────────────────────────────── -->
+<!-- ── Block License Modal ───────────────────────────────────────────────────── -->
 <div id="modal-revoke" class="modal-overlay hidden">
   <div class="modal modal-sm">
-    <div class="modal-header"><h2>Revoke License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
+    <div class="modal-header"><h2>Block License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
     <div class="modal-body">
-      <p>Revoke <strong id="rv-label"></strong>?</p>
-      <p class="warn-text">The machine will self-uninstall on next internet check-in.</p>
+      <p>Block <strong id="rv-label"></strong>?</p>
+      <p class="warn-text">All machines running this license will self-uninstall on next check-in. New installs of this EXE will also be rejected. Use Reactivate to undo.</p>
     </div>
     <div class="modal-footer">
       <button class="btn-ghost" onclick="closeModal('modal-revoke')">Cancel</button>
-      <button class="btn-danger" onclick="confirmRevoke()">Yes, Revoke</button>
+      <button class="btn-danger" onclick="confirmRevoke()">Yes, Block</button>
     </div>
   </div>
 </div>
@@ -240,6 +240,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=6"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

@@ -243,20 +243,22 @@ namespace WdpMgr
 
         private void RefreshStatus()
         {
-            string st = Program.GetServiceStatus();
-            bool inst = st != "Not installed";
-            _btnInstall.Enabled   = !inst;
-            _btnUninstall.Enabled = inst;
+            string st      = Program.GetServiceStatus();
+            bool installed = (st != "Not installed");
+            bool running   = (st == "Running");
+            _btnInstall.Enabled   = !running;    // allow install even if Stopped (handles leftover entries)
+            _btnUninstall.Enabled = installed;
 
             LicenseData lic;
             bool hasLic = Program.ReadLicense(out lic);
             bool sigOk  = hasLic && Program.VerifyLicense(lic);
             string licInfo;
-            if (!hasLic)         licInfo = "License: NOT FOUND — place wdp.lic here";
-            else if (!sigOk)     licInfo = "License: INVALID SIGNATURE";
-            else if (lic.Type == "temp" && !string.IsNullOrEmpty(lic.Expiry))
-                                 licInfo = "License: Temp (expires " + lic.Expiry + ")";
-            else                 licInfo = "License: Active (Lifetime)";
+            if (!hasLic)             licInfo = "License: NOT FOUND";
+            else if (!sigOk)         licInfo = "License: INVALID SIGNATURE";
+            else if (lic.Type == "temp")  licInfo = "License: Temp — expires " + lic.Expiry;
+            else if (lic.Type == "days")  licInfo = "License: Days — " + lic.DurationDays + "h from activation";
+            else if (lic.Type == "hr")    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(lic.Expiry) ? "" : " — until " + lic.Expiry);
+            else                          licInfo = "License: Lifetime";
 
             _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
         }
@@ -269,6 +271,12 @@ namespace WdpMgr
             {
                 MessageBox.Show("No valid license file found.\r\nPlace wdp.lic in the same folder as this executable.", "License Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
+            }
+            // Auto-remove any leftover stopped service entry before fresh install
+            if (Program.GetServiceStatus() != "Not installed")
+            {
+                Program.UninstallService();
+                Thread.Sleep(1500);
             }
             Cursor = Cursors.WaitCursor;
             string err;
