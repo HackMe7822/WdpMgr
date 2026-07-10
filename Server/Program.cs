@@ -163,6 +163,18 @@ app.MapDelete("/api/admin/licenses/{id}", (HttpContext ctx, string id) => {
     DB.RevokeLicense(db, id);
     return Results.Json(new { ok = true });
 });
+app.MapPost("/api/admin/licenses/{id}/reactivate", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.ReactivateLicense(db, id);
+    return Results.Json(new { ok = true });
+});
+app.MapDelete("/api/admin/licenses/{id}/purge", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.PurgeLicense(db, id);
+    return Results.Json(new { ok = true });
+});
 
 // ── Machines ──────────────────────────────────────────────────────────────────
 app.MapGet("/api/admin/machines", (HttpContext ctx) => {
@@ -285,7 +297,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         if (lic.Type == "days") {
             if (!string.IsNullOrEmpty(lic.ActivatedAt)) {
                 if (DateTime.TryParse(lic.ActivatedAt, out var ad)) {
-                    if (DateTime.UtcNow.Date > ad.Date.AddDays(lic.DurationDays))
+                    if (DateTime.UtcNow > ad.AddHours(lic.DurationDays))  // DurationDays stored as hours
                         return Results.Json(new { status="expired" });
                 }
             }
@@ -301,7 +313,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
         if (machine == null) {
             int cur = DB.GetActivationCount(db, licId);
-            if (cur >= lic.MaxActivations)
+            if (lic.MaxActivations > 0 && cur >= lic.MaxActivations)
                 return Results.Json(new { status="wrong_machine", message="max activations reached" });
             // First activation of a days-license: record activated_at
             if (lic.Type == "days" && string.IsNullOrEmpty(lic.ActivatedAt))
@@ -315,7 +327,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         // Return remaining days for days-type
         object extra = new { };
         if (lic.Type == "days" && !string.IsNullOrEmpty(lic.ActivatedAt) && DateTime.TryParse(lic.ActivatedAt, out var act))
-            extra = new { daysRemaining = (int)(act.Date.AddDays(lic.DurationDays) - DateTime.UtcNow.Date).TotalDays };
+            extra = new { hoursRemaining = (int)(act.AddHours(lic.DurationDays) - DateTime.UtcNow).TotalHours };
 
         return Results.Json(new { status="ok", licenseType=lic.Type, extra });
     }
@@ -588,6 +600,22 @@ static class DB
         c.ExecuteNonQuery();
     }
 
+    public static void ReactivateLicense(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE licenses SET revoked=0 WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+        c.CommandText = "UPDATE machines SET status='active' WHERE license_id=$id AND status='revoked'";
+        c.ExecuteNonQuery();
+    }
+
+    public static void PurgeLicense(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "DELETE FROM machines WHERE license_id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+        c.CommandText = "DELETE FROM licenses WHERE id=$id";
+        c.ExecuteNonQuery();
+    }
+
     public static void RevokeLicense(SqliteConnection db, string id) {
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE licenses SET revoked=1 WHERE id=$id";
@@ -623,9 +651,9 @@ static class DB
             string actAt     = r.IsDBNull(13) ? "" : r.GetString(13);
             int    daysLeft  = -1;
             if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed))
-                daysLeft = (int)(ed.Date - DateTime.UtcNow.Date).TotalDays;
+                daysLeft = (int)(ed.ToUniversalTime() - DateTime.UtcNow).TotalDays;
             else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad))
-                daysLeft = (int)(ad.Date.AddDays(durDays) - DateTime.UtcNow.Date).TotalDays;
+                daysLeft = (int)(ad.AddHours(durDays) - DateTime.UtcNow).TotalHours; // hours remaining
             list.Add(new {
                 id=r.GetString(0), licenseId=r.GetString(1),
                 licenseLabel=r.IsDBNull(2)?"":r.GetString(2),

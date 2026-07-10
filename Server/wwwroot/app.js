@@ -4,6 +4,19 @@ let API_KEY  = '';
 let USERNAME = '';
 let revokeId = '', revokeLabel_ = '';
 
+// ── Session persistence (survive hard refresh) ────────────────────────────────
+(function restoreSession() {
+  const k = sessionStorage.getItem('wdp_key');
+  const u = sessionStorage.getItem('wdp_user');
+  if (k && u) {
+    API_KEY = k; USERNAME = u;
+    // Verify key still valid then enter app
+    fetch('/api/admin/stats', { headers: { 'X-Admin-Key': k } })
+      .then(r => { if (r.ok) enterApp(); else sessionStorage.clear(); })
+      .catch(() => sessionStorage.clear());
+  }
+})();
+
 // ── SVG icons injected into <i data-icon> ─────────────────────────────────────
 const ICONS = {
   grid:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>',
@@ -46,6 +59,8 @@ function doLogin() {
 function showLoginErr(m) { document.getElementById('login-error').textContent = m; }
 
 function enterApp() {
+  sessionStorage.setItem('wdp_key', API_KEY);
+  sessionStorage.setItem('wdp_user', USERNAME);
   document.getElementById('login-overlay').style.display = 'none';
   document.getElementById('app').classList.remove('hidden');
   document.getElementById('whoami').textContent = USERNAME;
@@ -57,6 +72,7 @@ function enterApp() {
 
 function doLogout() {
   API_KEY = ''; USERNAME = '';
+  sessionStorage.clear();
   document.getElementById('app').classList.add('hidden');
   document.getElementById('login-overlay').style.display = '';
   document.getElementById('login-pass').value = '';
@@ -117,26 +133,31 @@ function loadLicenses() {
     const tbody = document.getElementById('lic-body');
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses yet.</td></tr>'; return; }
     tbody.innerHTML = list.map(l => {
+      const unlimited = l.maxActivations < 0;
       const status = l.revoked ? 'revoked'
-        : (l.type==='temp' && l.expiry && l.expiry < today()) ? 'expired'
-        : (l.type==='days' && l.activatedAt && daysExpired(l.activatedAt, l.durationDays)) ? 'expired'
+        : (l.type==='temp' && l.expiry && new Date(l.expiry) < new Date()) ? 'expired'
+        : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
         : 'active';
       const expCol = l.type==='lifetime' ? '∞ Lifetime'
-        : l.type==='temp'    ? e(l.expiry)
-        : l.type==='days'    ? `${l.durationDays} days${l.activatedAt ? ' (activated '+l.activatedAt+')':' (not yet activated)'}`
-        : `${l.maxActivations} seats (HR)`;
+        : l.type==='temp'    ? e(l.expiry.replace('T',' '))
+        : l.type==='days'    ? fmtHours(l.durationDays) + (l.activatedAt ? ' (activated '+l.activatedAt+')':' (not yet activated)')
+        : (unlimited ? '∞' : l.maxActivations) + ' seats (HR)';
+      const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
       return `<tr>
         <td><strong>${e(l.label)}</strong>${l.notes?'<br><small class="muted">'+e(l.notes)+'</small>':''}</td>
         <td><span class="badge badge-type-${l.type}">${l.type}</span></td>
         <td class="muted">${e(l.appName||'—')}</td>
         <td class="muted">${e(l.issued)}</td>
         <td class="muted">${expCol}</td>
-        <td class="muted">${l.activeSeats} / ${l.maxActivations}</td>
+        <td class="muted">${seatsCol}</td>
         <td>${badge(status)}</td>
         <td>
-          ${!l.revoked?`<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
-          <button class="btn-icon danger" onclick='openRevoke("${l.id}","${e(l.label)}")'>✕ Revoke</button>`
-          :'<span class="muted small">revoked</span>'}
+          ${!l.revoked
+            ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
+               <button class="btn-icon danger" onclick='openRevoke("${l.id}","${e(l.label)}")'>✕ Revoke</button>`
+            : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
+               <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑 Delete</button>`
+          }
         </td></tr>`;
     }).join('');
   }).catch(e2 => toast(e2.message, true));
@@ -153,7 +174,12 @@ function loadMachines() {
         timeLeft = '<span style="color:var(--green)">∞</span>';
       } else if (typeof m.daysLeft === 'number') {
         if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
-        else { const c = m.daysLeft <= 7 ? 'var(--amber)' : 'var(--green)'; timeLeft = `<span style="color:${c}">${m.daysLeft}d</span>`; }
+        else {
+          const isHours = m.licenseType === 'days';
+          const label   = isHours ? fmtHours(m.daysLeft) : m.daysLeft + 'd';
+          const warn    = isHours ? m.daysLeft <= 48 : m.daysLeft <= 7;
+          timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;
+        }
       }
       return `<tr>
         <td>${e(m.hostname||'—')}</td>
@@ -242,13 +268,22 @@ function resetKey(id, name) {
 }
 
 // ── License CRUD ──────────────────────────────────────────────────────────────
+function onUnlimitedChange() {
+  const chk = document.getElementById('nl-unlimited');
+  const inp = document.getElementById('nl-maxact');
+  inp.disabled = chk.checked;
+  if (chk.checked) inp.value = '';
+}
+
 function openLicModal() {
-  document.getElementById('nl-label').value  = '';
-  document.getElementById('nl-type').value   = 'lifetime';
-  document.getElementById('nl-expiry').value = '';
-  document.getElementById('nl-days').value   = '30';
-  document.getElementById('nl-maxact').value = '1';
-  document.getElementById('nl-notes').value  = '';
+  document.getElementById('nl-label').value    = '';
+  document.getElementById('nl-type').value     = 'lifetime';
+  document.getElementById('nl-expiry').value   = '';
+  document.getElementById('nl-days').value     = '720';
+  document.getElementById('nl-maxact').value   = '1';
+  document.getElementById('nl-maxact').disabled = false;
+  document.getElementById('nl-unlimited').checked = false;
+  document.getElementById('nl-notes').value    = '';
   onLicTypeChange();
   // Populate app dropdown
   api('GET','/api/admin/apps').then(apps => {
@@ -273,7 +308,7 @@ function createLicense() {
   const type   = document.getElementById('nl-type').value;
   const expiry = document.getElementById('nl-expiry').value;
   const days   = parseInt(document.getElementById('nl-days').value) || 0;
-  const maxAct = parseInt(document.getElementById('nl-maxact').value) || 1;
+  const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
   const appId  = document.getElementById('nl-app').value;
   const notes  = document.getElementById('nl-notes').value.trim();
   if (!label) { toast('Label required', true); return; }
@@ -293,6 +328,20 @@ function openRevoke(id, label) {
 function confirmRevoke() {
   api('DELETE',`/api/admin/licenses/${revokeId}`).then(()=>{
     closeModal('modal-revoke'); toast('License revoked'); loadLicenses(); loadDashboard();
+  }).catch(e2 => toast(e2.message, true));
+}
+
+function reactivateLicense(id, label) {
+  if (!confirm(`Reactivate "${label}"? Machines can check in again.`)) return;
+  api('POST',`/api/admin/licenses/${id}/reactivate`).then(()=>{
+    toast('License reactivated'); loadLicenses(); loadDashboard();
+  }).catch(e2 => toast(e2.message, true));
+}
+
+function purgeLicense(id, label) {
+  if (!confirm(`Permanently DELETE "${label}"? This cannot be undone.`)) return;
+  api('DELETE',`/api/admin/licenses/${id}/purge`).then(()=>{
+    toast('License deleted'); loadLicenses(); loadDashboard();
   }).catch(e2 => toast(e2.message, true));
 }
 
@@ -401,10 +450,15 @@ function badge(status) {
 
 function today() { return new Date().toISOString().slice(0,10); }
 
-function daysExpired(activatedAt, durationDays) {
+function hoursExpired(activatedAt, durationHours) {
   const exp = new Date(activatedAt);
-  exp.setDate(exp.getDate() + durationDays);
+  exp.setTime(exp.getTime() + durationHours * 3600000);
   return new Date() > exp;
+}
+
+function fmtHours(h) {
+  if (h >= 48) return Math.floor(h/24) + 'd ' + (h%24 ? (h%24)+'h' : '');
+  return h + 'h';
 }
 
 function noData(cols) { return `<tr><td colspan="${cols}" class="empty">No data yet.</td></tr>`; }

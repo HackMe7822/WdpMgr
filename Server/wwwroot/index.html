@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>WdpMgr Admin</title>
-  <link rel="stylesheet" href="style.css?v=4"/>
+  <link rel="stylesheet" href="style.css?v=5"/>
 </head>
 <body>
 
@@ -161,11 +161,19 @@
         <option value="hr">HR / Per-seat — tracks individual Windows users</option>
       </select>
 
-      <div id="nl-row-expiry" class="hidden"><label>Expiry Date &amp; Time</label><input type="datetime-local" id="nl-expiry"/></div>
-      <div id="nl-row-days"   class="hidden"><label>Duration (days)</label><input type="number" id="nl-days" value="30" min="1"/></div>
+      <div id="nl-row-expiry" class="hidden"><label>Expiry Date &amp; Time (server UTC)</label><input type="datetime-local" id="nl-expiry"/></div>
+      <div id="nl-row-days" class="hidden">
+        <label>Duration (hours) <span class="muted small">— e.g. 24 = 1 day, 168 = 1 week, 720 = 30 days</span></label>
+        <input type="number" id="nl-days" value="720" min="1"/>
+      </div>
 
       <label id="nl-seats-label">Max Machines / Seats</label>
-      <input type="number" id="nl-maxact" value="1" min="1"/>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:13px">
+        <input type="number" id="nl-maxact" value="1" min="1" style="margin-bottom:0;flex:1"/>
+        <label style="display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer;margin-bottom:0">
+          <input type="checkbox" id="nl-unlimited" onchange="onUnlimitedChange()" style="width:auto;margin-bottom:0"/> Unlimited
+        </label>
+      </div>
 
       <label>App / DLL (optional)</label>
       <select id="nl-app"><option value="">— any app —</option></select>
@@ -232,6 +240,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=4"></script>
+<script src="app.js?v=5"></script>
 </body>
 </html>
