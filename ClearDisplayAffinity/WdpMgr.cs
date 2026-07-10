@@ -387,11 +387,8 @@ namespace WdpMgr
             if (MessageBox.Show("Stop and remove the Windows Display Policy Manager service?\n\nThis will also permanently delete the application.", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             SetBusy("Stopping service...");
             Program.UninstallService();
-            SetBusy("Notifying server...");
-            LicenseData licUn;
-            if (Program.ReadLicense(out licUn)) Program.Unregister(licUn);
             SetBusy("Removing files...");
-            Thread.Sleep(600);
+            Thread.Sleep(900);
             MessageBox.Show("Service removed. The application will now delete itself.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Program.SelfDestruct();
             Application.Exit();
@@ -964,24 +961,6 @@ namespace WdpMgr
                 return "ok";
             }
             catch { return "offline"; }
-        }
-
-        internal static void Unregister(LicenseData lic)
-        {
-            if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return;
-            try
-            {
-                string fp      = GetFingerprint();
-                string winUser = EscapeJson(WmiGet("Win32_ComputerSystem", "UserName"));
-                string json    = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
-                               + "\"fingerprint\":\"" + fp + "\","
-                               + "\"windowsUser\":\"" + winUser + "\"}";
-                var wc = new System.Net.WebClient();
-                wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
-                wc.Encoding = Encoding.UTF8;
-                wc.UploadString(lic.Server.TrimEnd('/') + "/api/unregister", json);
-            }
-            catch { }
         }
 
         internal static string GetFingerprint()
