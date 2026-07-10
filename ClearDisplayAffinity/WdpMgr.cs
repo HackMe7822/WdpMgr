@@ -99,6 +99,7 @@ namespace WdpMgr
         public string AppId;
         public string Server;       // check-in URL
         public string Sig;          // base64 RSA-SHA256 signature
+        public string PubKey;       // base64-encoded RSA XML (embedded in EXE, overrides constant)
     }
 
     // =========================================================================
@@ -710,12 +711,13 @@ namespace WdpMgr
 
         internal static bool ReadLicense(out LicenseData lic)
         {
+            // Try wdp.lic file next to EXE first; fall back to embedded license in EXE tail
             lic = new LicenseData();
             try
             {
                 string exeDir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location);
                 string path   = Path.Combine(exeDir, "wdp.lic");
-                if (!File.Exists(path)) return false;
+                if (!File.Exists(path)) return TryReadEmbeddedLicense(out lic);
                 string[] lines = File.ReadAllLines(path);
                 if (lines.Length == 0 || lines[0].Trim() != "WDPMGR_LICENSE_V1") return false;
                 foreach (string line in lines)
@@ -733,6 +735,55 @@ namespace WdpMgr
                         case "durationDays": lic.DurationDays = v; break;
                         case "appId":        lic.AppId        = v; break;
                         case "server":       lic.Server       = v; break;
+                        case "pubkey":       lic.PubKey       = v; break;
+                        case "sig":          lic.Sig          = v; break;
+                    }
+                }
+                return !string.IsNullOrEmpty(lic.Id) && !string.IsNullOrEmpty(lic.Sig);
+            }
+            catch { return false; }
+        }
+
+        // Try reading license embedded in the EXE's tail (appended by server at download time)
+        private static bool TryReadEmbeddedLicense(out LicenseData lic)
+        {
+            lic = new LicenseData();
+            try
+            {
+                const string BEGIN = "WDPMGR_LIC_BEGIN\n";
+                const string END   = "WDPMGR_LIC_END";
+                string exePath = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                long fileLen   = new FileInfo(exePath).Length;
+                int  tailLen   = (int)Math.Min(8192, fileLen);
+                byte[] tail    = new byte[tailLen];
+                using (var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    fs.Seek(-tailLen, SeekOrigin.End);
+                    fs.Read(tail, 0, tailLen);
+                }
+                string tailStr = Encoding.UTF8.GetString(tail);
+                int si = tailStr.LastIndexOf(BEGIN);
+                int ei = tailStr.LastIndexOf(END);
+                if (si < 0 || ei <= si) return false;
+                string content = tailStr.Substring(si + BEGIN.Length, ei - si - BEGIN.Length);
+                if (content.Trim() == "" || !content.Contains("WDPMGR_LICENSE_V1")) return false;
+                foreach (string rawLine in content.Split('\n'))
+                {
+                    string line = rawLine.Trim('\r', ' ');
+                    int eq = line.IndexOf('=');
+                    if (eq < 1) continue;
+                    string k = line.Substring(0, eq).Trim();
+                    string v = line.Substring(eq + 1).Trim();
+                    switch (k)
+                    {
+                        case "id":           lic.Id           = v; break;
+                        case "type":         lic.Type         = v; break;
+                        case "expiry":       lic.Expiry       = v; break;
+                        case "issued":       lic.Issued       = v; break;
+                        case "durationDays": lic.DurationDays = v; break;
+                        case "appId":        lic.AppId        = v; break;
+                        case "server":       lic.Server       = v; break;
+                        case "pubkey":       lic.PubKey       = v; break;
                         case "sig":          lic.Sig          = v; break;
                     }
                 }
@@ -743,8 +794,17 @@ namespace WdpMgr
 
         internal static bool VerifyLicense(LicenseData lic)
         {
-            // Dev mode: no key embedded yet → allow
-            if (RSA_PUBLIC_KEY_XML == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true;
+            // Resolve which public key to use:
+            // 1. Embedded pubkey in this EXE (base64-encoded XML, set by server at download)
+            // 2. Compiled-in constant RSA_PUBLIC_KEY_XML (set via set-pubkey.bat)
+            // 3. Dev mode if placeholder not replaced
+            string pubKeyXml = RSA_PUBLIC_KEY_XML;
+            if (!string.IsNullOrEmpty(lic.PubKey))
+            {
+                try { pubKeyXml = Encoding.UTF8.GetString(Convert.FromBase64String(lic.PubKey)); }
+                catch { return false; }
+            }
+            if (pubKeyXml == "REPLACE_WITH_SERVER_PUBLIC_KEY") return true; // dev mode
             try
             {
                 string payload = lic.Id + "|" + lic.Type + "|" + lic.Expiry + "|" + lic.Issued + "|" + (lic.DurationDays ?? "0");
@@ -755,7 +815,7 @@ namespace WdpMgr
                     byte[] hash = sha.ComputeHash(data);
                     using (var rsa = new RSACryptoServiceProvider())
                     {
-                        rsa.FromXmlString(RSA_PUBLIC_KEY_XML);
+                        rsa.FromXmlString(pubKeyXml);
                         // SHA256 OID: 2.16.840.1.101.3.4.2.1
                         return rsa.VerifyHash(hash, "2.16.840.1.101.3.4.2.1", sig);
                     }

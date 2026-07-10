@@ -1,10 +1,10 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:       #0d1520;  --bg2: #111c2d;  --bg3: #1a2a42;
-  --border:   #1e3050;  --accent: #2d6be4; --accent-h: #3d7bf4;
-  --green:    #22c55e;  --amber: #f5c842;  --red: #ef4444;  --purple: #a855f7;
-  --text:     #e2e8f0;  --muted-c: #64748b;
+  --bg:       #f0f4f8;  --bg2: #ffffff;   --bg3: #e8edf3;
+  --border:   #d1dae6;  --accent: #2563eb; --accent-h: #1d4ed8;
+  --green:    #16a34a;  --amber: #d97706;  --red: #dc2626;  --purple: #9333ea;
+  --text:     #0f172a;  --muted-c: #64748b;
   --mono:     'Consolas','Courier New',monospace;
   --sans:     'Segoe UI',system-ui,sans-serif;
 }

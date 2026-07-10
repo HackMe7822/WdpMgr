@@ -70,7 +70,7 @@ function nav(name, el) {
   const view = document.getElementById('view-' + name);
   if (view) view.classList.add('active');
   if (el)  el.classList.add('active');
-  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, apps: loadApps, users: loadUsers };
+  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, apps: loadApps, users: loadUsers, settings: loadSettings };
   if (loaders[name]) loaders[name]();
 }
 
@@ -134,7 +134,7 @@ function loadLicenses() {
         <td class="muted">${l.activeSeats} / ${l.maxActivations}</td>
         <td>${badge(status)}</td>
         <td>
-          ${!l.revoked?`<button class="btn-icon" onclick='dlLic("${l.id}")'>⬇ .lic</button>
+          ${!l.revoked?`<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
           <button class="btn-icon danger" onclick='openRevoke("${l.id}","${e(l.label)}")'>✕ Revoke</button>`
           :'<span class="muted small">revoked</span>'}
         </td></tr>`;
@@ -147,17 +147,26 @@ function loadMachines() {
   api('GET','/api/admin/machines').then(list => {
     const tbody = document.getElementById('mach-body');
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines have checked in yet.</td></tr>'; return; }
-    tbody.innerHTML = list.map(m => `<tr>
-      <td>${e(m.hostname||'—')}</td>
-      <td class="mono">${e(m.windowsUser||'—')}</td>
-      <td>${e(m.licenseLabel||m.licenseId)}</td>
-      <td class="muted">${e(m.ipAddress||'—')}</td>
-      <td class="muted">${e(m.firstSeen)}</td>
-      <td class="muted">${e(m.lastSeen||'—')}</td>
-      <td><span class="mono fp" title="${e(m.seatKey)}">${e(m.seatKey.substring(0,14))}…</span></td>
-      <td>${badge(m.status)}</td>
-      <td>${m.status!=='revoked'?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")'>✕</button>`:''}</td>
-    </tr>`).join('');
+    tbody.innerHTML = list.map(m => {
+      let timeLeft = '—';
+      if (m.licenseType === 'lifetime') {
+        timeLeft = '<span style="color:var(--green)">∞</span>';
+      } else if (typeof m.daysLeft === 'number') {
+        if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
+        else { const c = m.daysLeft <= 7 ? 'var(--amber)' : 'var(--green)'; timeLeft = `<span style="color:${c}">${m.daysLeft}d</span>`; }
+      }
+      return `<tr>
+        <td>${e(m.hostname||'—')}</td>
+        <td class="mono">${e(m.windowsUser||'—')}</td>
+        <td>${e(m.licenseLabel||m.licenseId)}</td>
+        <td class="muted">${e(m.ipAddress||'—')}</td>
+        <td>${timeLeft}</td>
+        <td class="muted">${e(m.lastSeen||'—')}</td>
+        <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
+        <td>${badge(m.status)}</td>
+        <td>${m.status!=='revoked'?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")'>✕</button>`:''}</td>
+      </tr>`;
+    }).join('');
   }).catch(e2 => toast(e2.message, true));
 }
 
@@ -288,29 +297,68 @@ function confirmRevoke() {
 }
 
 function revokeMachine(id) {
-  if (!confirm('Revoke this machine?')) return;
-  api('DELETE',`/api/admin/machines/${id}`).then(()=>{ toast('Machine revoked'); loadMachines(); })
+  if (!confirm('Revoke this machine? It will self-uninstall on next check-in.')) return;
+  api('POST',`/api/admin/machines/${id}/revoke`).then(()=>{ toast('Machine revoked'); loadMachines(); })
     .catch(e2 => toast(e2.message, true));
 }
 
-function dlLic(id) {
+function dlExe(id) {
   fetch(`/api/admin/licenses/${id}/download`, { headers:{'X-Admin-Key':API_KEY} })
-    .then(r => { if (!r.ok) throw new Error('Error '+r.status); return r.blob(); })
-    .then(blob => {
+    .then(r => {
+      if (!r.ok) return r.json().then(d => { throw new Error(d.error || 'Error '+r.status); });
+      const cd = r.headers.get('content-disposition') || '';
+      const m  = cd.match(/filename="?([^";\r\n]+)"?/);
+      return r.blob().then(blob => ({ blob, fname: m ? m[1] : 'WdpMgr.exe' }));
+    })
+    .then(({blob, fname}) => {
       const url  = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = 'wdp.lic'; link.click();
-      URL.revokeObjectURL(url); toast('wdp.lic downloaded');
+      link.href = url; link.download = fname; link.click();
+      URL.revokeObjectURL(url); toast(fname + ' downloaded');
     }).catch(e2 => toast(e2.message, true));
 }
 
 // ── Settings ──────────────────────────────────────────────────────────────────
-function loadAdminKey() {
+function loadSettings() {
   api('GET','/api/admin/settings').then(d => {
-    document.getElementById('adminkey-area').value = d.adminKey || '';
-    toast('Admin key loaded');
+    document.getElementById('server-url-input').value = d.serverUrl || '';
+    const exSt = document.getElementById('exe-status');
+    if (d.exeUploaded) {
+      exSt.innerHTML = `<span style="color:var(--green)">✓ WdpMgr_base.exe uploaded</span> <span class="muted">(${(d.exeSize/1024).toFixed(1)} KB)</span>`;
+    } else {
+      exSt.innerHTML = '<span style="color:var(--amber)">⚠ No base EXE uploaded yet — upload WdpMgr.exe to enable license downloads.</span>';
+    }
+    if (d.adminKey) document.getElementById('adminkey-area').value = d.adminKey;
   }).catch(err => toast(err.message, true));
 }
+
+function saveServerUrl() {
+  const url = document.getElementById('server-url-input').value.trim();
+  if (!url) { toast('Enter a server URL', true); return; }
+  api('POST','/api/admin/settings',{serverUrl: url}).then(()=>{
+    toast('Server URL saved');
+  }).catch(err => toast(err.message, true));
+}
+
+function uploadExe() {
+  const fi = document.getElementById('exe-file-input');
+  if (!fi.files || !fi.files[0]) { toast('Select a .exe file first', true); return; }
+  const fd = new FormData();
+  fd.append('exe', fi.files[0]);
+  const exSt = document.getElementById('exe-status');
+  exSt.textContent = 'Uploading…';
+  fetch('/api/admin/exe/upload', {
+    method: 'POST',
+    headers: { 'X-Admin-Key': API_KEY },
+    body: fd
+  }).then(r => r.json().then(d => {
+    if (!r.ok) throw new Error(d.error || 'Upload failed');
+    exSt.innerHTML = `<span style="color:var(--green)">✓ WdpMgr_base.exe uploaded (${(d.size/1024).toFixed(1)} KB)</span>`;
+    toast('EXE uploaded successfully');
+    fi.value = '';
+  })).catch(err => { exSt.textContent = 'Upload failed'; toast(err.message, true); });
+}
+
 function toggleAdminKey() {
   const el = document.getElementById('adminkey-area');
   el.type = el.type === 'password' ? 'text' : 'password';

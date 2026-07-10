@@ -168,17 +168,51 @@ app.MapDelete("/api/admin/machines/{id}", (HttpContext ctx, string id) => {
     return Results.Json(new { ok = true });
 });
 
-// ── Download .lic ─────────────────────────────────────────────────────────────
+// ── Download bundled EXE (base EXE + embedded license + pubkey) ───────────────
 app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     var lic = DB.GetLicenseById(db, id);
     if (lic == null) return Results.Json(new { error = "not found" }, statusCode: 404);
     if (lic.Revoked) return Results.Json(new { error = "revoked" }, statusCode: 400);
-    string serverUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
-    string content   = RsaSvc.GenerateLicFile(db, lic, serverUrl);
-    ctx.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"wdp.lic\"");
-    return Results.Content(content, "text/plain");
+    string baseExePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
+    if (!File.Exists(baseExePath))
+        return Results.Json(new { error = "Base WdpMgr.exe not uploaded yet. Go to Settings → Upload EXE." }, statusCode: 400);
+    string serverUrl = DB.GetSetting(db, "server_url");
+    if (string.IsNullOrEmpty(serverUrl))
+        serverUrl = $"{ctx.Request.Scheme}://{ctx.Request.Host}";
+    byte[] bundled = RsaSvc.GenerateBundledExe(db, lic, serverUrl, File.ReadAllBytes(baseExePath));
+    string fname = "WdpMgr_" + new string(lic.Label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray()) + ".exe";
+    return Results.File(bundled, "application/octet-stream", fname);
+});
+
+// ── EXE upload ────────────────────────────────────────────────────────────────
+app.MapPost("/api/admin/exe/upload", async (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    if (!ctx.Request.HasFormContentType) return Results.BadRequest();
+    var form = await ctx.Request.ReadFormAsync();
+    var file = form.Files["exe"];
+    if (file == null || file.Length == 0) return Results.Json(new { error = "no file" }, statusCode: 400);
+    string dest = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
+    using var fs = File.Create(dest);
+    await file.CopyToAsync(fs);
+    return Results.Json(new { ok = true, size = file.Length });
+});
+
+// ── EXE upload status ─────────────────────────────────────────────────────────
+app.MapGet("/api/admin/exe/info", (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    string p = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
+    bool exists = File.Exists(p);
+    return Results.Json(new { exists, size = exists ? new FileInfo(p).Length : 0 });
+});
+
+// ── Machine revoke (triggers self-destruct on next check-in) ──────────────────
+app.MapPost("/api/admin/machines/{id}/revoke", (HttpContext ctx, string id) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var db = DB.Open(dbPath);
+    DB.RevokeMachine(db, id);
+    return Results.Json(new { ok = true });
 });
 
 // ── Public key ────────────────────────────────────────────────────────────────
@@ -188,10 +222,26 @@ app.MapGet("/api/admin/publickey", (HttpContext ctx) => {
     return Results.Json(new { publicKeyXml = RsaSvc.GetPublicKeyXml(db) });
 });
 
-// ── Settings (admin key reveal) ───────────────────────────────────────────────
+// ── Settings ──────────────────────────────────────────────────────────────────
 app.MapGet("/api/admin/settings", (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
-    return Results.Json(new { adminKey = masterKey });
+    using var db = DB.Open(dbPath);
+    string exePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
+    bool exeUploaded = File.Exists(exePath);
+    long exeSize     = exeUploaded ? new FileInfo(exePath).Length : 0;
+    return Results.Json(new {
+        adminKey  = masterKey,
+        serverUrl = DB.GetSetting(db, "server_url"),
+        exeUploaded, exeSize
+    });
+});
+app.MapPost("/api/admin/settings", async (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string serverUrl = S(doc.RootElement, "serverUrl");
+    using var db = DB.Open(dbPath);
+    DB.SetSetting(db, "server_url", serverUrl.TrimEnd('/'));
+    return Results.Json(new { ok = true });
 });
 
 // ── Client check-in ───────────────────────────────────────────────────────────
@@ -318,6 +368,10 @@ static class DB
                 first_seen TEXT NOT NULL,
                 last_seen TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active'
+            );
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
             );
         ");
         // Add columns if upgrading from older schema
@@ -544,18 +598,30 @@ static class DB
         var list = new List<object>();
         using var c = db.CreateCommand();
         c.CommandText = @"SELECT m.id,m.license_id,l.label,m.seat_key,m.hostname,m.windows_user,
-                                 m.ip_address,m.first_seen,m.last_seen,m.status
+                                 m.ip_address,m.first_seen,m.last_seen,m.status,
+                                 l.type,l.expiry,l.duration_days,l.activated_at
                           FROM machines m LEFT JOIN licenses l ON l.id=m.license_id
                           ORDER BY m.last_seen DESC";
         using var r = c.ExecuteReader();
-        while (r.Read())
+        while (r.Read()) {
+            string licType   = r.IsDBNull(10) ? "" : r.GetString(10);
+            string expiry    = r.IsDBNull(11) ? "" : r.GetString(11);
+            int    durDays   = r.IsDBNull(12) ? 0  : r.GetInt32(12);
+            string actAt     = r.IsDBNull(13) ? "" : r.GetString(13);
+            int    daysLeft  = -1;
+            if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed))
+                daysLeft = (int)(ed.Date - DateTime.UtcNow.Date).TotalDays;
+            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad))
+                daysLeft = (int)(ad.Date.AddDays(durDays) - DateTime.UtcNow.Date).TotalDays;
             list.Add(new {
                 id=r.GetString(0), licenseId=r.GetString(1),
                 licenseLabel=r.IsDBNull(2)?"":r.GetString(2),
                 seatKey=r.GetString(3), hostname=r.GetString(4),
                 windowsUser=r.GetString(5), ipAddress=r.GetString(6),
-                firstSeen=r.GetString(7), lastSeen=r.GetString(8), status=r.GetString(9)
+                firstSeen=r.GetString(7), lastSeen=r.GetString(8), status=r.GetString(9),
+                licenseType=licType, daysLeft
             });
+        }
         return list;
     }
 
@@ -603,6 +669,20 @@ static class DB
         c.CommandText = "UPDATE machines SET status='revoked' WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
     }
+
+    // ── Settings key-value ─────────────────────────────────────────────────────
+    public static string GetSetting(SqliteConnection db, string key) {
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT value FROM settings WHERE key=$k";
+        c.Parameters.AddWithValue("$k", key);
+        return (string?)c.ExecuteScalar() ?? "";
+    }
+    public static void SetSetting(SqliteConnection db, string key, string value) {
+        using var c = db.CreateCommand();
+        c.CommandText = "INSERT INTO settings(key,value) VALUES($k,$v) ON CONFLICT(key) DO UPDATE SET value=$v";
+        c.Parameters.AddWithValue("$k", key); c.Parameters.AddWithValue("$v", value);
+        c.ExecuteNonQuery();
+    }
 }
 
 
@@ -636,6 +716,19 @@ static class RsaSvc
         using var c = db.CreateCommand();
         c.CommandText = "SELECT private_key FROM rsa_keys LIMIT 1";
         return (string?)c.ExecuteScalar() ?? "";
+    }
+
+    public static byte[] GenerateBundledExe(SqliteConnection db, DB.LicenseRow lic, string serverUrl, byte[] baseExe) {
+        string licText   = GenerateLicFile(db, lic, serverUrl);
+        string pubKeyXml = GetPublicKeyXml(db);
+        string pubKeyB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(pubKeyXml));
+        // Append embedded block after PE — Windows ignores trailing data
+        string tail = "\nWDPMGR_LIC_BEGIN\n" + licText + "pubkey=" + pubKeyB64 + "\nWDPMGR_LIC_END\n";
+        byte[] tailBytes = Encoding.UTF8.GetBytes(tail);
+        byte[] result = new byte[baseExe.Length + tailBytes.Length];
+        Buffer.BlockCopy(baseExe,  0, result, 0,             baseExe.Length);
+        Buffer.BlockCopy(tailBytes, 0, result, baseExe.Length, tailBytes.Length);
+        return result;
     }
 
     public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl) {

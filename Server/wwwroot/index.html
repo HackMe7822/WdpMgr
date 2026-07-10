@@ -78,7 +78,7 @@
     <section id="view-machines" class="view">
       <div class="page-header"><h1>Machines / Seats</h1></div>
       <table class="data-table">
-        <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>First Seen</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Action</th></tr></thead>
+        <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>Time Left</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="mach-body"></tbody>
       </table>
     </section>
@@ -106,6 +106,23 @@
       <div class="page-header"><h1>Settings</h1></div>
 
       <div class="settings-card" style="margin-bottom:18px">
+        <h3>Server URL</h3>
+        <p class="hint">Public URL clients use to check in (e.g. <code>https://bypass.creationsit.com</code>). Embedded into every downloaded EXE.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="server-url-input" placeholder="https://your-domain.com" style="margin-bottom:0"/>
+          <button class="btn-primary" onclick="saveServerUrl()" style="white-space:nowrap">Save</button>
+        </div>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:18px">
+        <h3>Upload Base WdpMgr.exe</h3>
+        <p class="hint">Upload your compiled <code>WdpMgr.exe</code> once. The server will embed the license + RSA key when you download a license EXE — no manual steps on a dev machine needed.</p>
+        <div id="exe-status" class="muted small" style="margin-bottom:10px">Checking…</div>
+        <input type="file" id="exe-file-input" accept=".exe" style="margin-bottom:10px"/>
+        <button class="btn-primary" onclick="uploadExe()">Upload EXE</button>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:18px">
         <h3>Master Admin Key</h3>
         <p class="hint">Used as <code>X-Admin-Key</code> header or as the master password (username: <code>master</code>) on login.</p>
         <button class="btn-secondary" onclick="loadAdminKey()">Show Key</button>
@@ -117,10 +134,10 @@
       </div>
 
       <div class="settings-card">
-        <h3>RSA Public Key</h3>
-        <p class="hint">Copy this, run <code>tools\set-pubkey.bat</code> on your build machine, then recompile <code>WdpMgr.exe</code>.</p>
-        <button class="btn-secondary" onclick="loadPubKey()">Load Key</button>
-        <textarea id="pubkey-area" class="code-area" rows="7" readonly placeholder="Click 'Load Key'…"></textarea>
+        <h3>RSA Public Key (read-only)</h3>
+        <p class="hint">Auto-embedded into every EXE download. Only needed if you compile WdpMgr.exe manually with <code>set-pubkey.bat</code>.</p>
+        <button class="btn-secondary" onclick="loadPubKey()">Show Key</button>
+        <textarea id="pubkey-area" class="code-area" rows="5" readonly placeholder="Click 'Show Key'…"></textarea>
         <button class="btn-secondary" onclick="copyPubKey()">Copy to Clipboard</button>
       </div>
     </section>
