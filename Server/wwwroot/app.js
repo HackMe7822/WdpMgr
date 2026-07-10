@@ -218,10 +218,13 @@ function renderMachines(list) {
       <td class="muted">${e(m.lastSeen||'—')}</td>
       <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
       <td>${badge(m.status)}</td>
-      <td>${m.status!=='revoked'
-        ?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")' title="Revoke this machine">✕ Revoke</button>`
-        :`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Re-allow this machine">↺ Un-Revoke</button>`
-      }</td>
+      <td style="white-space:nowrap">
+        ${m.status!=='revoked'
+          ?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")' title="Revoke — blocks this machine">✕ Revoke</button>`
+          :`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Un-Revoke">↺ Un-Revoke</button>`
+        }
+        <button class="btn-icon danger" onclick='deleteMachine("${m.id}","${e(m.hostname||m.id)}")' title="Delete row and free the seat">🗑</button>
+      </td>
     </tr>`;
   }).join('');
 }
@@ -429,6 +432,12 @@ function unrevokeMachine(id) {
     .catch(e2 => toast(e2.message, true));
 }
 
+function deleteMachine(id, label) {
+  if (!confirm(`Delete machine "${label}"?\n\nThis removes it from the database and frees the seat.\nThe machine will not be notified — it will keep running until its next check-in fails or it is revoked first.`)) return;
+  api('DELETE',`/api/admin/machines/${id}`).then(()=>{ toast('Machine deleted — seat freed'); loadMachines(); loadDashboard(); })
+    .catch(e2 => toast(e2.message, true));
+}
+
 function dlExe(id) {
   fetch(`/api/admin/licenses/${id}/download`, { headers:{'X-Admin-Key':API_KEY} })
     .then(r => {
@@ -543,7 +552,7 @@ function fmtMins(m) {
   if (m >= 2880) return Math.floor(m/1440) + 'd ' + (Math.floor((m%1440)/60) ? Math.floor((m%1440)/60)+'h' : '');
   if (m >= 60)   return Math.floor(m/60) + 'h ' + (m%60 ? (m%60)+'m' : '');
   if (m > 0)     return m + 'm';
-  return '< 1m';
+  return 'Expired';
 }
 
 function noData(cols) { return `<tr><td colspan="${cols}" class="empty">No data yet.</td></tr>`; }

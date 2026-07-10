@@ -206,7 +206,7 @@ app.MapGet("/api/admin/machines", (HttpContext ctx) => {
 app.MapDelete("/api/admin/machines/{id}", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
-    DB.RevokeMachine(db, id);
+    DB.DeleteMachine(db, id);
     return Results.Json(new { ok = true });
 });
 
@@ -758,6 +758,12 @@ static class DB
     public static void ActivateMachine(SqliteConnection db, string id) {
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE machines SET status='active' WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void DeleteMachine(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "DELETE FROM machines WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
     }
 
