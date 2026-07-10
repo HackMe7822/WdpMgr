@@ -116,11 +116,16 @@
       <div class="settings-card" style="margin-bottom:18px">
         <h3>Master Admin Key</h3>
         <p class="hint">Used as <code>X-Admin-Key</code> header or as the master password (username: <code>master</code>) on login.</p>
-        <button class="btn-secondary" onclick="loadAdminKey()">Show Key</button>
-        <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
-          <input type="password" id="adminkey-area" readonly placeholder="Click 'Show Key'…" style="margin-bottom:0;font-family:var(--mono);font-size:12px"/>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <input type="password" id="adminkey-area" readonly placeholder="Loading…" style="margin-bottom:0;font-family:var(--mono);font-size:12px"/>
           <button class="btn-icon" onclick="toggleAdminKey()" title="Show/hide">👁</button>
           <button class="btn-icon" onclick="copyAdminKey()">Copy</button>
+        </div>
+        <p class="hint" style="margin-bottom:6px">Change master key:</p>
+        <div style="display:flex;gap:8px">
+          <input type="password" id="newmasterkey-input" placeholder="New master key (min 8 chars)" style="margin-bottom:0"/>
+          <button class="btn-icon" onclick="toggleNewMasterKey()" title="Show/hide">👁</button>
+          <button class="btn-primary" onclick="changeMasterKey()" style="white-space:nowrap">Update</button>
         </div>
       </div>
 
@@ -230,6 +235,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=15"></script>
+<script src="app.js?v=16"></script>
 </body>
 </html>

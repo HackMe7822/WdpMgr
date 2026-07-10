@@ -23,6 +23,7 @@ var app = builder.Build();
 
 // ── DB init ───────────────────────────────────────────────────────────────────
 DB.Init(dbPath, firstUser, firstPass);
+{ using var db0 = DB.Open(dbPath); var saved = DB.GetSetting(db0, "master_key"); if (!string.IsNullOrEmpty(saved)) masterKey = saved; }
 Console.WriteLine($"[INFO] DB: {Path.GetFullPath(dbPath)}  |  http://localhost:{port}");
 
 app.UseDefaultFiles();
@@ -305,6 +306,18 @@ app.MapPost("/api/admin/settings", async (HttpContext ctx) => {
     string serverUrl = S(doc.RootElement, "serverUrl");
     using var db = DB.Open(dbPath);
     DB.SetSetting(db, "server_url", serverUrl.TrimEnd('/'));
+    return Results.Json(new { ok = true });
+});
+
+app.MapPost("/api/admin/settings/master-key", async (HttpContext ctx) => {
+    if (!AdminOk(ctx)) return Unauth();
+    using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+    string newKey = S(doc.RootElement, "key");
+    if (string.IsNullOrWhiteSpace(newKey) || newKey.Length < 8)
+        return Results.Json(new { error = "Key must be at least 8 characters" }, statusCode: 400);
+    using var db = DB.Open(dbPath);
+    DB.SetSetting(db, "master_key", newKey);
+    masterKey = newKey;
     return Results.Json(new { ok = true });
 });
 

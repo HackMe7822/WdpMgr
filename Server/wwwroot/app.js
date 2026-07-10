@@ -493,7 +493,7 @@ function loadSettings() {
     } else {
       exSt.innerHTML = '<span style="color:var(--amber)">⚠ No base EXE found — upload WdpMgr.exe to enable license downloads.</span>';
     }
-    if (d.adminKey) document.getElementById('adminkey-area').value = d.adminKey;
+    if (d.adminKey) { document.getElementById('adminkey-area').value = d.adminKey; }
   }).catch(err => toast(err.message, true));
 }
 
@@ -530,8 +530,24 @@ function toggleAdminKey() {
 }
 function copyAdminKey() {
   const v = document.getElementById('adminkey-area').value;
-  if (!v) { toast('Load the key first', true); return; }
+  if (!v) { toast('Nothing to copy', true); return; }
   navigator.clipboard.writeText(v).then(() => toast('Copied'));
+}
+function toggleNewMasterKey() {
+  const el = document.getElementById('newmasterkey-input');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+function changeMasterKey() {
+  const newKey = document.getElementById('newmasterkey-input').value;
+  if (!newKey || newKey.length < 8) { toast('Key must be at least 8 characters', true); return; }
+  if (!confirm('Change master key? You will need the new key to log in next time.')) return;
+  api('POST', '/api/admin/settings/master-key', { key: newKey }).then(() => {
+    toast('Master key updated');
+    document.getElementById('newmasterkey-input').value = '';
+    document.getElementById('adminkey-area').value = newKey;
+    API_KEY = newKey;
+    sessionStorage.setItem('wdp_key', newKey);
+  }).catch(e2 => toast(e2.message, true));
 }
 
 function loadPubKey() {
