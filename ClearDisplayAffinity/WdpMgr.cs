@@ -299,6 +299,21 @@ namespace WdpMgr
                 return;
             }
 
+            // Fast-fail if the embedded expiry has already passed
+            if (!string.IsNullOrEmpty(lic.Expiry))
+            {
+                DateTime expDt;
+                if (DateTime.TryParse(lic.Expiry, out expDt) && expDt.ToUniversalTime() < DateTime.UtcNow)
+                {
+                    Program.Log("DoInstall: license expired at " + lic.Expiry);
+                    MessageBox.Show(
+                        "This license expired on " + expDt.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + ".\n\n" +
+                        "Ask your admin to extend the license, then re-download the EXE from the admin panel.",
+                        "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
+
             // Auto-remove any leftover stopped service entry before fresh install
             if (Program.GetServiceStatus() != "Not installed")
             {
@@ -332,6 +347,24 @@ namespace WdpMgr
 
         private void DoRunOnce()
         {
+            LicenseData licRO;
+            if (!Program.ReadLicense(out licRO) || !Program.VerifyLicense(licRO))
+            {
+                MessageBox.Show("No valid license found in this EXE.", "License Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            if (!string.IsNullOrEmpty(licRO.Expiry))
+            {
+                DateTime expDtRO;
+                if (DateTime.TryParse(licRO.Expiry, out expDtRO) && expDtRO.ToUniversalTime() < DateTime.UtcNow)
+                {
+                    MessageBox.Show(
+                        "This license expired on " + expDtRO.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + ".\n\n" +
+                        "Ask your admin to extend the license, then re-download the EXE.",
+                        "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+            }
             try
             {
                 Cursor = Cursors.WaitCursor;

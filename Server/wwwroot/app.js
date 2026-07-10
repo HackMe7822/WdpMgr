@@ -168,12 +168,12 @@ function loadMachines() {
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines have checked in yet.</td></tr>'; return; }
     tbody.innerHTML = list.map(m => {
       let timeLeft = '—';
-      if (m.licenseType === 'lifetime') {
+      if (m.licenseType === 'lifetime' || m.daysLeft === null || m.daysLeft === undefined) {
         timeLeft = '<span style="color:var(--green)">∞</span>';
       } else if (typeof m.daysLeft === 'number') {
         if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
         else {
-          const isHours = m.licenseType === 'days';
+          const isHours = m.licenseType === 'days' || m.licenseType === 'hr';
           const label   = isHours ? fmtHours(m.daysLeft) : m.daysLeft + 'd';
           const warn    = isHours ? m.daysLeft <= 48 : m.daysLeft <= 7;
           timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;

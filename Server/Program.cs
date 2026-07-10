@@ -685,11 +685,13 @@ static class DB
             string expiry    = r.IsDBNull(11) ? "" : r.GetString(11);
             int    durDays   = r.IsDBNull(12) ? 0  : r.GetInt32(12);
             string actAt     = r.IsDBNull(13) ? "" : r.GetString(13);
-            int    daysLeft  = -1;
+            int? daysLeft = null; // null = unlimited (lifetime or hr with no expiry)
             if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed))
                 daysLeft = (int)(ed.ToUniversalTime() - DateTime.UtcNow).TotalDays;
             else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad))
-                daysLeft = (int)(ad.AddHours(durDays) - DateTime.UtcNow).TotalHours; // hours remaining
+                daysLeft = (int)(ad.AddHours(durDays) - DateTime.UtcNow).TotalHours;
+            else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hred))
+                daysLeft = (int)(hred.ToUniversalTime() - DateTime.UtcNow).TotalHours;
             list.Add(new {
                 id=r.GetString(0), licenseId=r.GetString(1),
                 licenseLabel=r.IsDBNull(2)?"":r.GetString(2),
