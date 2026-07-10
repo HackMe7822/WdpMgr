@@ -150,10 +150,27 @@ function renderLicenses(list) {
       : (l.type==='temp' && l.expiry && new Date(l.expiry) < new Date()) ? 'expired'
       : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
       : 'active';
-    const expCol = l.type==='lifetime' ? '∞ Lifetime'
-      : l.type==='temp'    ? 'Fixed expiry'
-      : l.type==='days'    ? fmtHours(l.durationDays)
-      : (unlimited ? '∞' : l.maxActivations) + ' seats (HR)';
+    let expCol;
+    if (l.type === 'lifetime') {
+      expCol = '∞ Lifetime';
+    } else if (l.revoked) {
+      expCol = '<span class="muted">—</span>';
+    } else if (l.daysLeft === null || l.daysLeft === undefined) {
+      // days type not yet activated
+      expCol = l.type === 'days' ? fmtHours(l.durationDays) + ' <span class="muted">(not activated)</span>' : '—';
+    } else if (l.daysLeft < 0) {
+      const expStr = l.expiryDisplay ? ' (' + l.expiryDisplay + ')' : '';
+      expCol = '<span style="color:#e05a5a">Expired' + expStr + '</span>';
+    } else {
+      const warn = l.daysLeft <= 2880;
+      const color = warn ? '#e08a3a' : '#4caf82';
+      if (l.daysLeft >= 2880 && l.expiryDisplay) {
+        expCol = '<span style="color:' + color + '" title="' + fmtMins(l.daysLeft) + ' remaining">' + l.expiryDisplay + '</span>';
+      } else {
+        const title = l.expiryDisplay ? ' title="Expires ' + l.expiryDisplay + '"' : '';
+        expCol = '<span style="color:' + color + '"' + title + '>' + fmtMins(l.daysLeft) + '</span>';
+      }
+    }
     const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
     return `<tr>
       <td><strong>${e(l.label)}</strong>${l.notes?'<br><small class="muted">'+e(l.notes)+'</small>':''}</td>

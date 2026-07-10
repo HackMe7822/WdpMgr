@@ -595,15 +595,36 @@ static class DB
                           LEFT JOIN machines m ON m.license_id=l.id AND m.status='active'
                           GROUP BY l.id ORDER BY l.issued DESC";
         using var r = c.ExecuteReader();
-        while (r.Read())
+        while (r.Read()) {
+            var licType  = r.GetString(2);
+            var expiry   = r.GetString(3);
+            var actAt    = r.GetString(8);
+            var durDays  = r.GetInt32(7);
+            var revoked  = r.GetInt32(5) == 1;
+            int? daysLeft = null;
+            string dispExpiry = "";
+            if (!revoked) {
+                if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ex))
+                    daysLeft = (int)(ex - DateTime.UtcNow).TotalMinutes;
+                else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
+                    daysLeft = (int)(adx.AddHours(durDays) - DateTime.UtcNow).TotalMinutes;
+                else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hex))
+                    daysLeft = (int)(hex - DateTime.UtcNow).TotalMinutes;
+            }
+            if ((licType == "temp" || licType == "hr") && !string.IsNullOrEmpty(expiry))
+                dispExpiry = expiry.Replace("T", " ");
+            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx2))
+                dispExpiry = adx2.AddHours(durDays).ToString("yyyy-MM-dd HH:mm");
             list.Add(new {
-                id=r.GetString(0), label=r.GetString(1), type=r.GetString(2),
-                expiry=r.GetString(3), issued=r.GetString(4), revoked=r.GetInt32(5)==1,
-                maxActivations=r.GetInt32(6), durationDays=r.GetInt32(7),
-                activatedAt=r.GetString(8), appId=r.GetString(9), notes=r.GetString(10),
+                id=r.GetString(0), label=r.GetString(1), type=licType,
+                expiry, issued=r.GetString(4), revoked,
+                maxActivations=r.GetInt32(6), durationDays=durDays,
+                activatedAt=actAt, appId=r.GetString(9), notes=r.GetString(10),
                 appName=r.IsDBNull(11)?"":r.GetString(11),
-                activeSeats=r.GetInt32(12)
+                activeSeats=r.GetInt32(12),
+                daysLeft, expiryDisplay=dispExpiry
             });
+        }
         return list;
     }
 
