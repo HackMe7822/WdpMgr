@@ -344,6 +344,8 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         string seatKey = fp;
 
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
+        // Migration: old rows used fp|winUser format — find and migrate them to fp-only
+        if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
         if (machine == null) {
             int cur = DB.GetActivationCount(db, licId);
             if (lic.MaxActivations > 0 && cur >= lic.MaxActivations)
@@ -355,6 +357,8 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         } else {
             if (machine.Status == "revoked") return Results.Json(new { status="revoked" });
             DB.UpdateMachineCheckin(db, machine.Id, host, ip);
+            // Migrate old fp|winUser seatKey to plain fp
+            if (machine.SeatKey != seatKey) DB.UpdateMachineSeatKey(db, machine.Id, seatKey);
         }
 
         // Return remaining days for days-type
@@ -760,6 +764,14 @@ static class DB
         if (!r.Read()) return null;
         return new MachineRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),
             r.GetString(4),r.GetString(5),r.GetString(6),r.GetString(7),r.GetString(8));
+    }
+
+    public static void UpdateMachineSeatKey(SqliteConnection db, string id, string seatKey) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET seat_key=$sk WHERE id=$id";
+        c.Parameters.AddWithValue("$sk", seatKey);
+        c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
     }
 
     public static int GetActivationCount(SqliteConnection db, string licId) {
