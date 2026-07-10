@@ -68,6 +68,7 @@
     <!-- ── Licenses ──────────────────────────────────────────────────────────── -->
     <section id="view-licenses" class="view">
       <div class="page-header"><h1>Licenses</h1><button class="btn-primary" onclick="openLicModal()">+ New License</button></div>
+      <div style="margin-bottom:12px"><input type="search" id="lic-search" placeholder="Search by label, type, status…" oninput="filterLicenses()" style="max-width:340px"/></div>
       <table class="data-table">
         <thead><tr><th>Label</th><th>Type</th><th>App</th><th>Issued</th><th>Expiry / Duration</th><th>Seats</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="lic-body"></tbody>
@@ -77,6 +78,7 @@
     <!-- ── Machines ──────────────────────────────────────────────────────────── -->
     <section id="view-machines" class="view">
       <div class="page-header"><h1>Machines / Seats</h1></div>
+      <div style="margin-bottom:12px"><input type="search" id="mach-search" placeholder="Search by hostname, user, license, IP, status…" oninput="filterMachines()" style="max-width:400px"/></div>
       <table class="data-table">
         <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>Time Left</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="mach-body"></tbody>
@@ -240,6 +242,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=8"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

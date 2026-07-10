@@ -264,6 +264,16 @@ namespace WdpMgr
             _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
         }
 
+        private void SetBusy(string msg)
+        {
+            _btnInstall.Enabled = false;
+            _btnUninstall.Enabled = false;
+            _btnOnce.Enabled = false;
+            _lblStatus.Text = msg;
+            Cursor = Cursors.WaitCursor;
+            Application.DoEvents();
+        }
+
         private void DoInstall()
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
@@ -315,12 +325,12 @@ namespace WdpMgr
             }
 
             // Pre-flight server check — catch revoked/expired/no-seats BEFORE installing
-            Cursor = Cursors.WaitCursor;
+            SetBusy("Checking license with server...");
             string preCheck = Program.CheckIn(lic);
-            Cursor = Cursors.Default;
             Program.Log("Pre-flight CheckIn: " + preCheck);
             if (preCheck == "revoked")
             {
+                RefreshStatus();
                 MessageBox.Show(
                     "This license or machine has been revoked by your admin.\n\n" +
                     "This EXE can no longer be used on this machine.\n" +
@@ -330,6 +340,7 @@ namespace WdpMgr
             }
             if (preCheck == "expired")
             {
+                RefreshStatus();
                 MessageBox.Show(
                     "This license has expired on the server.\n\n" +
                     "Ask your admin to extend the expiry, then re-download the EXE.",
@@ -338,6 +349,7 @@ namespace WdpMgr
             }
             if (preCheck == "wrong_machine")
             {
+                RefreshStatus();
                 MessageBox.Show(
                     "Max machines/seats reached for this license.\n\n" +
                     "Contact your admin to increase the seat limit or get a new license.",
@@ -346,6 +358,7 @@ namespace WdpMgr
             }
             if (preCheck == "invalid")
             {
+                RefreshStatus();
                 MessageBox.Show(
                     "Server rejected this license as invalid.\n\n" +
                     "Try re-downloading the EXE from the admin panel.\n\nLog: " + Program.LogPath,
@@ -357,17 +370,17 @@ namespace WdpMgr
             // Auto-remove any leftover stopped service entry before fresh install
             if (Program.GetServiceStatus() != "Not installed")
             {
+                SetBusy("Removing old service entry...");
                 Program.Log("Removing existing service entry before reinstall");
                 Program.UninstallService();
                 Thread.Sleep(1500);
             }
 
-            Cursor = Cursors.WaitCursor;
+            SetBusy("Installing service, please wait...");
             string err;
             bool ok = Program.InstallService(out err);
             Thread.Sleep(900);
             RefreshStatus();
-            Cursor = Cursors.Default;
             if (ok) MessageBox.Show("Service installed and started.\nDisplay affinity bypass is now active.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
             else    MessageBox.Show("Install failed:\n" + err + "\n\nLog: " + Program.LogPath, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }

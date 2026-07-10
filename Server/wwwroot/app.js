@@ -124,77 +124,107 @@ function loadDashboard() {
 }
 
 // ── Licenses ──────────────────────────────────────────────────────────────────
+let _allLicenses = [];
 function loadLicenses() {
   api('GET','/api/admin/licenses').then(list => {
-    const tbody = document.getElementById('lic-body');
-    if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses yet.</td></tr>'; return; }
-    tbody.innerHTML = list.map(l => {
-      const unlimited = l.maxActivations < 0;
-      const status = l.revoked ? 'revoked'
-        : (l.type==='temp' && l.expiry && new Date(l.expiry) < new Date()) ? 'expired'
-        : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
-        : 'active';
-      const expCol = l.type==='lifetime' ? '∞ Lifetime'
-        : l.type==='temp'    ? e(l.expiry.replace('T',' '))
-        : l.type==='days'    ? fmtHours(l.durationDays) + (l.activatedAt ? ' (activated '+l.activatedAt+')':' (not yet activated)')
-        : (unlimited ? '∞' : l.maxActivations) + ' seats (HR)';
-      const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
-      return `<tr>
-        <td><strong>${e(l.label)}</strong>${l.notes?'<br><small class="muted">'+e(l.notes)+'</small>':''}</td>
-        <td><span class="badge badge-type-${l.type}">${l.type}</span></td>
-        <td class="muted">${e(l.appName||'—')}</td>
-        <td class="muted">${e(l.issued)}</td>
-        <td class="muted">${expCol}</td>
-        <td class="muted">${seatsCol}</td>
-        <td>${badge(status)}</td>
-        <td>
-          ${!l.revoked
-            ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
-               <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}")'>✏</button>
-               <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Revoke</button>
-               <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
-            : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
-               <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑 Delete</button>`
-          }
-        </td></tr>`;
-    }).join('');
+    _allLicenses = list;
+    renderLicenses(list);
   }).catch(e2 => toast(e2.message, true));
+}
+function filterLicenses() {
+  const q = (document.getElementById('lic-search').value||'').toLowerCase();
+  renderLicenses(!q ? _allLicenses : _allLicenses.filter(l =>
+    (l.label||'').toLowerCase().includes(q) ||
+    (l.type||'').toLowerCase().includes(q) ||
+    (l.notes||'').toLowerCase().includes(q) ||
+    (l.appName||'').toLowerCase().includes(q) ||
+    (l.revoked?'revoked':l.expiry&&new Date(l.expiry)<new Date()?'expired':'active').includes(q)
+  ));
+}
+function renderLicenses(list) {
+  const tbody = document.getElementById('lic-body');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses found.</td></tr>'; return; }
+  tbody.innerHTML = list.map(l => {
+    const unlimited = l.maxActivations < 0;
+    const status = l.revoked ? 'revoked'
+      : (l.type==='temp' && l.expiry && new Date(l.expiry) < new Date()) ? 'expired'
+      : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
+      : 'active';
+    const expCol = l.type==='lifetime' ? '∞ Lifetime'
+      : l.type==='temp'    ? e(l.expiry.replace('T',' '))
+      : l.type==='days'    ? fmtHours(l.durationDays) + (l.activatedAt ? ' (activated '+l.activatedAt+')':' (not yet activated)')
+      : (unlimited ? '∞' : l.maxActivations) + ' seats (HR)';
+    const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
+    return `<tr>
+      <td><strong>${e(l.label)}</strong>${l.notes?'<br><small class="muted">'+e(l.notes)+'</small>':''}</td>
+      <td><span class="badge badge-type-${l.type}">${l.type}</span></td>
+      <td class="muted">${e(l.appName||'—')}</td>
+      <td class="muted">${e(l.issued)}</td>
+      <td class="muted">${expCol}</td>
+      <td class="muted">${seatsCol}</td>
+      <td>${badge(status)}</td>
+      <td>
+        ${!l.revoked
+          ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
+             <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}")'>✏</button>
+             <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Revoke</button>
+             <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
+          : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
+             <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑 Delete</button>`
+        }
+      </td></tr>`;
+  }).join('');
 }
 
 // ── Machines ──────────────────────────────────────────────────────────────────
+let _allMachines = [];
 function loadMachines() {
   api('GET','/api/admin/machines').then(list => {
-    const tbody = document.getElementById('mach-body');
-    if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines have checked in yet.</td></tr>'; return; }
-    tbody.innerHTML = list.map(m => {
-      let timeLeft = '—';
-      if (m.licenseType === 'lifetime' || m.daysLeft === null || m.daysLeft === undefined) {
-        timeLeft = '<span style="color:var(--green)">∞</span>';
-      } else if (typeof m.daysLeft === 'number') {
-        if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
-        else {
-          const isHours = m.licenseType === 'days' || m.licenseType === 'hr';
-          const label   = isHours ? fmtHours(m.daysLeft) : m.daysLeft + 'd';
-          const warn    = isHours ? m.daysLeft <= 48 : m.daysLeft <= 7;
-          timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;
-        }
-      }
-      return `<tr>
-        <td>${e(m.hostname||'—')}</td>
-        <td class="mono">${e(m.windowsUser||'—')}</td>
-        <td>${e(m.licenseLabel||m.licenseId)}</td>
-        <td class="muted">${e(m.ipAddress||'—')}</td>
-        <td>${timeLeft}</td>
-        <td class="muted">${e(m.lastSeen||'—')}</td>
-        <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
-        <td>${badge(m.status)}</td>
-        <td>${m.status!=='revoked'
-          ?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")' title="Revoke this machine">✕ Revoke</button>`
-          :`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Re-allow this machine">↺ Un-Revoke</button>`
-        }</td>
-      </tr>`;
-    }).join('');
+    _allMachines = list;
+    renderMachines(list);
   }).catch(e2 => toast(e2.message, true));
+}
+function filterMachines() {
+  const q = (document.getElementById('mach-search').value||'').toLowerCase();
+  renderMachines(!q ? _allMachines : _allMachines.filter(m =>
+    (m.hostname||'').toLowerCase().includes(q) ||
+    (m.windowsUser||'').toLowerCase().includes(q) ||
+    (m.licenseLabel||m.licenseId||'').toLowerCase().includes(q) ||
+    (m.ipAddress||'').toLowerCase().includes(q) ||
+    (m.status||'').toLowerCase().includes(q)
+  ));
+}
+function renderMachines(list) {
+  const tbody = document.getElementById('mach-body');
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines found.</td></tr>'; return; }
+  tbody.innerHTML = list.map(m => {
+    let timeLeft = '—';
+    if (m.licenseType === 'lifetime' || m.daysLeft === null || m.daysLeft === undefined) {
+      timeLeft = '<span style="color:var(--green)">∞</span>';
+    } else if (typeof m.daysLeft === 'number') {
+      if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
+      else {
+        const isHours = m.licenseType === 'days' || m.licenseType === 'hr';
+        const label   = isHours ? fmtHours(m.daysLeft) : m.daysLeft + 'd';
+        const warn    = isHours ? m.daysLeft <= 48 : m.daysLeft <= 7;
+        timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;
+      }
+    }
+    return `<tr>
+      <td>${e(m.hostname||'—')}</td>
+      <td class="mono">${e(m.windowsUser||'—')}</td>
+      <td>${e(m.licenseLabel||m.licenseId)}</td>
+      <td class="muted">${e(m.ipAddress||'—')}</td>
+      <td>${timeLeft}</td>
+      <td class="muted">${e(m.lastSeen||'—')}</td>
+      <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
+      <td>${badge(m.status)}</td>
+      <td>${m.status!=='revoked'
+        ?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")' title="Revoke this machine">✕ Revoke</button>`
+        :`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Re-allow this machine">↺ Un-Revoke</button>`
+      }</td>
+    </tr>`;
+  }).join('');
 }
 
 // ── Apps ──────────────────────────────────────────────────────────────────────
