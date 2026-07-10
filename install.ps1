@@ -200,13 +200,18 @@ ingress:
 "@ | Set-Content "$cfConfigDir\config.yml" -Encoding UTF8
 
     # CNAME record
-    $cname = "$tunnelId.cfargotunnel.com"
-    $ex = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_FullDomain" `
-        -Headers $hdrs -Method GET -EA SilentlyContinue
-    $rid = $ex.result[0].id
-    $dns = @{type="CNAME";name=$CF_Subdomain;content=$cname;proxied=$true} | ConvertTo-Json
-    if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns | Out-Null; OK "CNAME created" }
-    else           { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns | Out-Null; OK "CNAME updated" }
+    try {
+        $cname = "$tunnelId.cfargotunnel.com"
+        $ex = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_FullDomain" `
+            -Headers $hdrs -Method GET -EA Stop
+        $rid = $ex.result[0].id
+        $dns = @{type="CNAME";name=$CF_Subdomain;content=$cname;proxied=$true} | ConvertTo-Json
+        if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns -EA Stop | Out-Null; OK "CNAME created" }
+        else           { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns -EA Stop | Out-Null; OK "CNAME updated" }
+    } catch {
+        Warn "DNS update failed: $($_.Exception.Message)"
+        Warn "Add CNAME manually: $CF_FullDomain  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
+    }
 
     # cloudflared as service
     $cfSvc = Get-Service "cloudflared" -EA SilentlyContinue
@@ -312,17 +317,28 @@ ingress:
         OK "Ingress rule added/updated in $cfConfigFile"
     }
 
-    # ── CNAME DNS record ──────────────────────────────────────────────────────
+    # ── CNAME DNS record (wrapped so failure is a warning, not a crash) ────────
     if ($CF_ApiToken -and $CF_ZoneId -and $tunnelId) {
-        $hdrs  = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
-        $cname = "$tunnelId.cfargotunnel.com"
-        $sub   = ($CF_Hostname -split '\.')[0]
-        $ex    = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_Hostname" `
-                     -Headers $hdrs -Method GET -EA SilentlyContinue
-        $rid   = $ex.result[0].id
-        $dns   = @{type="CNAME";name=$sub;content=$cname;proxied=$true} | ConvertTo-Json
-        if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns | Out-Null; OK "CNAME created → $CF_Hostname" }
-        else            { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns | Out-Null; OK "CNAME updated → $CF_Hostname" }
+        try {
+            $hdrs  = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
+            $cname = "$tunnelId.cfargotunnel.com"
+            $sub   = ($CF_Hostname -split '\.')[0]
+            $ex    = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_Hostname" `
+                         -Headers $hdrs -Method GET -EA Stop
+            $rid   = $ex.result[0].id
+            $dns   = @{type="CNAME";name=$sub;content=$cname;proxied=$true} | ConvertTo-Json
+            if (-not $rid) {
+                Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns -EA Stop | Out-Null
+                OK "CNAME created → $CF_Hostname"
+            } else {
+                Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT -Body $dns -EA Stop | Out-Null
+                OK "CNAME updated → $CF_Hostname"
+            }
+        } catch {
+            Warn "DNS update failed: $($_.Exception.Message)"
+            Warn "Token may lack DNS:Edit + Zone:Read permissions, or be the wrong token type."
+            Warn "Add CNAME manually: $CF_Hostname  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
+        }
     } elseif ($tunnelId) {
         Warn "Add DNS manually: CNAME  $CF_Hostname  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
     }
