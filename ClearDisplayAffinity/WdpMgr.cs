@@ -1203,6 +1203,23 @@ namespace WdpMgr
                 return 0;
             }
 
+            // Self-elevate: if not running as admin, relaunch with UAC prompt
+            if (!IsAdmin())
+            {
+                try
+                {
+                    Process.Start(new ProcessStartInfo(
+                        Process.GetCurrentProcess().MainModule.FileName)
+                    {
+                        UseShellExecute = true,
+                        Verb            = "runas",
+                        Arguments       = string.Join(" ", args)
+                    });
+                }
+                catch { } // User cancelled the UAC prompt — just exit
+                return 0;
+            }
+
             // Scripted command-line use
             foreach (var a in args)
             {
