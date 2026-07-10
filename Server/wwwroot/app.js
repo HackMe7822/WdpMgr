@@ -151,8 +151,8 @@ function renderLicenses(list) {
       : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
       : 'active';
     const expCol = l.type==='lifetime' ? '∞ Lifetime'
-      : l.type==='temp'    ? e(l.expiry.replace('T',' '))
-      : l.type==='days'    ? fmtHours(l.durationDays) + (l.activatedAt ? ' (activated '+l.activatedAt+')':' (not yet activated)')
+      : l.type==='temp'    ? 'Fixed expiry'
+      : l.type==='days'    ? fmtHours(l.durationDays)
       : (unlimited ? '∞' : l.maxActivations) + ' seats (HR)';
     const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
     return `<tr>
