@@ -53,13 +53,13 @@
     <section id="view-dashboard" class="view active">
       <div class="page-header"><h1>Dashboard</h1><button class="btn-primary" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))">+ New License</button></div>
       <div class="stats-grid">
-        <div class="stat-card">           <div class="stat-label">Total Licenses</div>   <div class="stat-value" id="s-total">—</div></div>
-        <div class="stat-card accent-g">  <div class="stat-label">Active</div>            <div class="stat-value" id="s-active">—</div></div>
-        <div class="stat-card accent-a">  <div class="stat-label">Expired</div>           <div class="stat-value" id="s-expired">—</div></div>
-        <div class="stat-card accent-r">  <div class="stat-label">Revoked</div>           <div class="stat-value" id="s-revoked">—</div></div>
-        <div class="stat-card accent-b">  <div class="stat-label">Active Seats</div>      <div class="stat-value" id="s-machines">—</div></div>
-        <div class="stat-card">           <div class="stat-label">Apps Registered</div>   <div class="stat-value" id="s-apps">—</div></div>
-        <div class="stat-card">           <div class="stat-label">Admin Users</div>        <div class="stat-value" id="s-users">—</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Total Licenses</div> <div class="stat-value" id="s-total">—</div></div>
+        <div class="stat-card accent-g" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Active</div>          <div class="stat-value" id="s-active">—</div></div>
+        <div class="stat-card accent-a" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Expired</div>         <div class="stat-value" id="s-expired">—</div></div>
+        <div class="stat-card accent-r" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Revoked</div>         <div class="stat-value" id="s-revoked">—</div></div>
+        <div class="stat-card accent-b" style="cursor:pointer" onclick="nav('machines',document.querySelector('[data-view=machines]'))"><div class="stat-label">Active Seats</div>   <div class="stat-value" id="s-machines">—</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('apps',document.querySelector('[data-view=apps]'))">        <div class="stat-label">Apps Registered</div><div class="stat-value" id="s-apps">—</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('users',document.querySelector('[data-view=users]'))">      <div class="stat-label">Admin Users</div>    <div class="stat-value" id="s-users">—</div></div>
       </div>
       <div class="section-header"><h2>Recent Machines</h2><a href="#" class="link-more" onclick="nav('machines',document.querySelector('[data-view=machines]'));return false">View all →</a></div>
       <table class="data-table"><thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>Last Check-in</th><th>Status</th></tr></thead><tbody id="dash-machines"></tbody></table>
