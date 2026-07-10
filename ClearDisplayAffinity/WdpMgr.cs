@@ -129,11 +129,7 @@ namespace WdpMgr
             // --- Description ------------------------------------------------
             var desc = new Label
             {
-                Text      = "Click the buttons below to install or uninstall the`r`n" +
-                            "Windows Display Policy Manager service. When`r`n" +
-                            "installed, this software runs in the background`r`n" +
-                            "as a system service and manages display policy`r`n" +
-                            "settings for all active desktop sessions.",
+                Text      = "Click the buttons below to install or uninstall the Windows Display Policy Manager service.\r\n\r\nWhen installed, this software runs in the background as a system service and manages display policy settings for all active desktop sessions.",
                 Location  = new Point(12, 14),
                 Size      = new Size(296, 100),
                 AutoSize  = false
@@ -256,9 +252,9 @@ namespace WdpMgr
             string licInfo;
             if (!hasLic)             licInfo = "License: NOT FOUND";
             else if (!sigOk)         licInfo = "License: INVALID SIGNATURE";
-            else if (lic.Type == "temp")  licInfo = "License: Temp — expires " + lic.Expiry;
+            else if (lic.Type == "temp")  licInfo = "License: Temp — expires " + lic.Expiry.Replace("T", " ");
             else if (lic.Type == "days")  licInfo = "License: Days — " + lic.DurationDays + "h from activation";
-            else if (lic.Type == "hr")    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(lic.Expiry) ? "" : " — until " + lic.Expiry);
+            else if (lic.Type == "hr")    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(lic.Expiry) ? "" : " — until " + lic.Expiry.Replace("T", " "));
             else                          licInfo = "License: Lifetime";
 
             _lblStatus.Text = "Status: " + st + "    |    " + licInfo;

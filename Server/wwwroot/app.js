@@ -204,9 +204,8 @@ function renderMachines(list) {
     } else if (typeof m.daysLeft === 'number') {
       if (m.daysLeft < 0) timeLeft = '<span style="color:var(--red)">Expired</span>';
       else {
-        const isHours = m.licenseType === 'days' || m.licenseType === 'hr';
-        const label   = isHours ? fmtHours(m.daysLeft) : m.daysLeft + 'd';
-        const warn    = isHours ? m.daysLeft <= 48 : m.daysLeft <= 7;
+        const label = fmtMins(m.daysLeft); // daysLeft is now minutes remaining
+        const warn  = m.daysLeft <= 2880;  // amber when <= 48h remaining
         timeLeft = `<span style="color:${warn?'var(--amber)':'var(--green)'}">${label}</span>`;
       }
     }
@@ -538,6 +537,13 @@ function hoursExpired(activatedAt, durationHours) {
 function fmtHours(h) {
   if (h >= 48) return Math.floor(h/24) + 'd ' + (h%24 ? (h%24)+'h' : '');
   return h + 'h';
+}
+
+function fmtMins(m) {
+  if (m >= 2880) return Math.floor(m/1440) + 'd ' + (Math.floor((m%1440)/60) ? Math.floor((m%1440)/60)+'h' : '');
+  if (m >= 60)   return Math.floor(m/60) + 'h ' + (m%60 ? (m%60)+'m' : '');
+  if (m > 0)     return m + 'm';
+  return '< 1m';
 }
 
 function noData(cols) { return `<tr><td colspan="${cols}" class="empty">No data yet.</td></tr>`; }
