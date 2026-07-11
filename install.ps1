@@ -139,14 +139,17 @@ Write-Host "  ── Step 5/6: Windows Service ───────────
 $dataDir = "$InstallDir\data"
 if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory $dataDir -Force | Out-Null }
 
-# Auto-copy base WdpMgr.exe from repo into data dir so no manual upload is needed
-$clientExe = "$repoDir\ClearDisplayAffinity\WdpMgr.exe"
-$baseExeDst = "$dataDir\WdpMgr_base.exe"
-if (Test-Path $clientExe) {
-    Copy-Item $clientExe $baseExeDst -Force
-    OK "WdpMgr_base.exe copied from repo ($([math]::Round((Get-Item $baseExeDst).Length/1KB,1)) KB)"
-} else {
-    Warn "WdpMgr.exe not found in repo — upload it manually from Settings in the admin panel."
+# Auto-copy client base EXEs from repo into data dir
+@(
+    @{ Src = "$repoDir\ClearDisplayAffinity\WdpMgr.exe"; Dst = "$dataDir\WdpMgr_base.exe" },
+    @{ Src = "$repoDir\WinOverlay\WinOverlay.exe";        Dst = "$dataDir\WinOverlay_base.exe" }
+) | ForEach-Object {
+    if (Test-Path $_.Src) {
+        Copy-Item $_.Src $_.Dst -Force
+        OK "$([IO.Path]::GetFileName($_.Dst)) copied ($([math]::Round((Get-Item $_.Dst).Length/1KB,1)) KB)"
+    } else {
+        Warn "$([IO.Path]::GetFileName($_.Src)) not in repo — upload manually from Settings."
+    }
 }
 
 $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue

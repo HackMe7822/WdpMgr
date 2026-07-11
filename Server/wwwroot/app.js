@@ -82,7 +82,7 @@ function nav(name, el) {
   if (view) view.classList.add('active');
   if (el)  el.classList.add('active');
   currentView = name;
-  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, users: loadUsers, settings: loadSettings };
+  const loaders = { dashboard: loadDashboard, licenses: loadLicenses, machines: loadMachines, apps: loadApps, users: loadUsers, settings: loadSettings };
   if (loaders[name]) loaders[name]();
   clearInterval(_autoRefreshTimer);
   if (name === 'licenses' || name === 'machines') {
@@ -189,7 +189,7 @@ function renderLicenses(list) {
       <td>${badge(status)}</td>
       <td>
         ${!l.revoked
-          ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>⬇ EXE</button>
+          ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>${l.appSlug==='macoverlay'?'⬇ .lic':'⬇ EXE'}</button>
              <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}")'>✏</button>
              <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Revoke</button>
              <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
@@ -264,6 +264,41 @@ function renderMachines(list) {
 }
 
 // ── Apps ──────────────────────────────────────────────────────────────────────
+function loadApps() {
+  api('GET','/api/admin/apps').then(list => {
+    const tbody = document.getElementById('apps-body');
+    if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No apps yet. Add WdpMgr, WinOverlay, MacOverlay etc.</td></tr>'; return; }
+    tbody.innerHTML = list.map(a => `<tr>
+      <td><strong>${e(a.name)}</strong></td>
+      <td><code class="mono">${e(a.slug)}</code></td>
+      <td class="muted">${e(a.description||'—')}</td>
+      <td class="muted">${e(a.createdAt||'—')}</td>
+      <td><button class="btn-icon danger" onclick='deleteApp("${a.id}","${e(a.name)}")'>✕ Delete</button></td>
+    </tr>`).join('');
+  }).catch(e2 => toast(e2.message, true));
+}
+
+function createApp() {
+  const name = document.getElementById('na-name').value.trim();
+  const slug = document.getElementById('na-slug').value.trim().toLowerCase().replace(/\s+/g,'');
+  const desc = document.getElementById('na-desc').value.trim();
+  if (!name) { toast('Name required', true); return; }
+  if (!slug) { toast('Slug required', true); return; }
+  api('POST','/api/admin/apps',{name,slug,description:desc}).then(()=>{
+    closeModal('modal-app');
+    document.getElementById('na-name').value = '';
+    document.getElementById('na-slug').value = '';
+    document.getElementById('na-desc').value = '';
+    toast('App added'); loadApps();
+  }).catch(e2 => toast(e2.message, true));
+}
+
+function deleteApp(id, name) {
+  if (!confirm(`Delete app "${name}"?\n\nExisting licenses with this app will still work but won't validate app-scope.`)) return;
+  api('DELETE',`/api/admin/apps/${id}`).then(()=>{ toast('App deleted'); loadApps(); })
+    .catch(e2 => toast(e2.message, true));
+}
+
 // ── Admin Users ───────────────────────────────────────────────────────────────
 function loadUsers() {
   api('GET','/api/admin/users').then(list => {
@@ -348,7 +383,7 @@ function openLicModal() {
   api('GET','/api/admin/apps').then(apps => {
     const sel = document.getElementById('nl-app');
     sel.innerHTML = '<option value="">— any app —</option>' +
-      apps.map(a => `<option value="${a.id}">${e(a.name)}</option>`).join('');
+      apps.map(a => `<option value="${a.id}">${e(a.name)} (${e(a.slug)})</option>`).join('');
   }).catch(()=>{});
   nav('licenses', document.querySelector('[data-view=licenses]'));
   openModal('modal-lic');

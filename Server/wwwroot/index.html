@@ -37,6 +37,7 @@
       <li class="nav-item active" data-view="dashboard" onclick="nav('dashboard',this)"><i data-icon="grid"></i>Dashboard</li>
       <li class="nav-item" data-view="licenses"  onclick="nav('licenses',this)"><i data-icon="file"></i>Licenses</li>
       <li class="nav-item" data-view="machines"  onclick="nav('machines',this)"><i data-icon="monitor"></i>Machines</li>
+      <li class="nav-item" data-view="apps"      onclick="nav('apps',this)"><i data-icon="box"></i>Apps</li>
       <li class="nav-item" data-view="users"     onclick="nav('users',this)"><i data-icon="users"></i>Admin Users</li>
       <li class="nav-item" data-view="settings"  onclick="nav('settings',this)"><i data-icon="settings"></i>Settings</li>
     </ul>
@@ -80,6 +81,16 @@
       <table class="data-table">
         <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>Time Left</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody id="mach-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Apps ────────────────────────────────────────────────────────────────── -->
+    <section id="view-apps" class="view">
+      <div class="page-header"><h1>Apps / Tools</h1><button class="btn-primary" onclick="openModal('modal-app')">+ Add App</button></div>
+      <p class="hint" style="margin-bottom:16px">Define the tools/apps that can be licensed. Each app has a unique slug used by clients to identify themselves at check-in.</p>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Slug</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="apps-body"></tbody>
       </table>
     </section>
 
@@ -199,6 +210,25 @@
   </div>
 </div>
 
+<!-- ── Add App Modal ─────────────────────────────────────────────────────────── -->
+<div id="modal-app" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Add App / Tool</h2><button class="modal-close" onclick="closeModal('modal-app')">✕</button></div>
+    <div class="modal-body">
+      <label>Name <span class="req">*</span></label>
+      <input type="text" id="na-name" placeholder="e.g. WdpMgr, WinOverlay, MacOverlay"/>
+      <label>Slug <span class="req">*</span> <span class="muted small">— lowercase, no spaces; sent by client at check-in</span></label>
+      <input type="text" id="na-slug" placeholder="e.g. wdpmgr, winoverlay, macoverlay"/>
+      <label>Description</label>
+      <input type="text" id="na-desc" placeholder="Optional description"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-app')">Cancel</button>
+      <button class="btn-primary" onclick="createApp()">Add App</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── Add Admin User Modal ───────────────────────────────────────────────────── -->
 <div id="modal-user" class="modal-overlay hidden">
   <div class="modal modal-sm">
@@ -235,6 +265,6 @@
 </div>
 
 <div id="toast" class="toast hidden"></div>
-<script src="app.js?v=16"></script>
+<script src="app.js?v=17"></script>
 </body>
 </html>

@@ -51,15 +51,18 @@ Info "Building server..."
 if ($LASTEXITCODE -ne 0) { Fail "Build failed. Check output above." }
 OK "Server built"
 
-# ── Copy WdpMgr base exe ───────────────────────────────────────────────────────
-$dataDir   = "$InstallDir\data"
-$clientExe = "$repoDir\ClearDisplayAffinity\WdpMgr.exe"
-$baseExe   = "$dataDir\WdpMgr_base.exe"
-if (Test-Path $clientExe) {
-    Copy-Item $clientExe $baseExe -Force
-    OK "WdpMgr_base.exe updated ($([math]::Round((Get-Item $baseExe).Length/1KB,1)) KB)"
-} else {
-    Write-Host "  [WARN]  WdpMgr.exe not in repo — keeping existing base exe" -ForegroundColor Yellow
+# ── Copy client base EXEs ─────────────────────────────────────────────────────
+$dataDir = "$InstallDir\data"
+@(
+    @{ Src = "$repoDir\ClearDisplayAffinity\WdpMgr.exe";   Dst = "$dataDir\WdpMgr_base.exe"   },
+    @{ Src = "$repoDir\WinOverlay\WinOverlay.exe";          Dst = "$dataDir\WinOverlay_base.exe" }
+) | ForEach-Object {
+    if (Test-Path $_.Src) {
+        Copy-Item $_.Src $_.Dst -Force
+        OK "$([IO.Path]::GetFileName($_.Dst)) updated ($([math]::Round((Get-Item $_.Dst).Length/1KB,1)) KB)"
+    } else {
+        Write-Host "  [WARN]  $([IO.Path]::GetFileName($_.Src)) not in repo — keeping existing" -ForegroundColor Yellow
+    }
 }
 
 # ── Restart service ────────────────────────────────────────────────────────────

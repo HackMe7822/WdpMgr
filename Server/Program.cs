@@ -116,12 +116,15 @@ app.MapPost("/api/admin/apps", async (HttpContext ctx) => {
     using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
     string name = S(doc.RootElement, "name");
     string desc = S(doc.RootElement, "description");
+    string slug = S(doc.RootElement, "slug").ToLower().Trim();
     if (string.IsNullOrWhiteSpace(name))
         return Results.Json(new { error = "name required" }, statusCode: 400);
+    if (string.IsNullOrWhiteSpace(slug))
+        return Results.Json(new { error = "slug required" }, statusCode: 400);
     string id = Guid.NewGuid().ToString();
     using var db = DB.Open(dbPath);
-    DB.CreateApp(db, id, name, desc);
-    return Results.Json(new { id, name, description = desc });
+    DB.CreateApp(db, id, name, desc, slug);
+    return Results.Json(new { id, name, description = desc, slug });
 });
 app.MapDelete("/api/admin/apps/{id}", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
@@ -221,24 +224,46 @@ app.MapDelete("/api/admin/machines/{id}", (HttpContext ctx, string id) => {
     return Results.Json(new { ok = true });
 });
 
-// ── Download bundled EXE (base EXE + embedded license + pubkey) ───────────────
+// ── Download bundled EXE or .lic (base EXE + embedded license + pubkey) ──────
 app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
     using var db = DB.Open(dbPath);
     var lic = DB.GetLicenseById(db, id);
     if (lic == null) return Results.Json(new { error = "not found" }, statusCode: 404);
     if (lic.Revoked) return Results.Json(new { error = "revoked" }, statusCode: 400);
-    string baseExePath = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(dbPath))!, "WdpMgr_base.exe");
-    if (!File.Exists(baseExePath))
-        return Results.Json(new { error = "Base WdpMgr.exe not uploaded yet. Go to Settings → Upload EXE." }, statusCode: 400);
+    string dataDir = Path.GetDirectoryName(Path.GetFullPath(dbPath))!;
     string serverUrl = DB.GetSetting(db, "server_url");
     if (string.IsNullOrEmpty(serverUrl)) {
         string proto = ctx.Request.Headers.TryGetValue("X-Forwarded-Proto", out var xfp2) ? xfp2.ToString() : ctx.Request.Scheme;
         serverUrl = $"{proto}://{ctx.Request.Host}";
     }
+    string safeLabel = new string(lic.Label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
+    string appSlug = DB.GetAppSlug(db, lic.AppId);
+    // macoverlay: return standalone .lic file (no binary bundling on Mac)
+    if (appSlug == "macoverlay") {
+        string licText = RsaSvc.GenerateLicFile(db, lic, serverUrl);
+        string pubKeyB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(RsaSvc.GetPublicKeyXml(db)));
+        byte[] licBytes = Encoding.UTF8.GetBytes(licText + "pubkey=" + pubKeyB64 + "\n");
+        return Results.File(licBytes, "application/octet-stream", "MacOverlay_" + safeLabel + ".lic");
+    }
+    // Windows EXEs: pick base by slug
+    string baseExeName = appSlug switch {
+        "winoverlay" => "WinOverlay_base.exe",
+        "wdpmgr"     => "WdpMgr_base.exe",
+        ""           => "WdpMgr_base.exe",
+        _            => appSlug + "_base.exe"
+    };
+    string exePrefix = appSlug switch {
+        "winoverlay" => "WinOverlay",
+        "wdpmgr"     => "WdpMgr",
+        ""           => "WdpMgr",
+        _            => appSlug
+    };
+    string baseExePath = Path.Combine(dataDir, baseExeName);
+    if (!File.Exists(baseExePath))
+        return Results.Json(new { error = $"Base {baseExeName} not found on server. Run update.ps1 or upload via Settings." }, statusCode: 400);
     byte[] bundled = RsaSvc.GenerateBundledExe(db, lic, serverUrl, File.ReadAllBytes(baseExePath));
-    string fname = "WdpMgr_" + new string(lic.Label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray()) + ".exe";
-    return Results.File(bundled, "application/octet-stream", fname);
+    return Results.File(bundled, "application/octet-stream", exePrefix + "_" + safeLabel + ".exe");
 });
 
 // ── EXE upload ────────────────────────────────────────────────────────────────
@@ -359,9 +384,12 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
             }
         }
 
-        // App-scope check
-        if (!string.IsNullOrEmpty(lic.AppId) && !string.IsNullOrEmpty(appId) && lic.AppId != appId)
-            return Results.Json(new { status="invalid", message="app mismatch" });
+        // App-scope check: license.app_id is a UUID; client sends slug string
+        if (!string.IsNullOrEmpty(lic.AppId) && !string.IsNullOrEmpty(appId)) {
+            string licAppSlug = DB.GetAppSlug(db, lic.AppId);
+            if (!string.IsNullOrEmpty(licAppSlug) && !licAppSlug.Equals(appId, StringComparison.OrdinalIgnoreCase))
+                return Results.Json(new { status="invalid", message="app mismatch" });
+        }
 
         // Seat key is always fingerprint — one seat per physical machine regardless of Windows user
         string seatKey = fp;
@@ -466,6 +494,8 @@ static class DB
             ("licenses","app_id",       "TEXT NOT NULL DEFAULT ''"),
             ("machines","seat_key",     "TEXT NOT NULL DEFAULT ''"),
             ("machines","windows_user", "TEXT NOT NULL DEFAULT ''"),
+            ("apps",    "slug",         "TEXT NOT NULL DEFAULT ''"),
+            ("licenses","notes",        "TEXT NOT NULL DEFAULT ''"),
         }) {
             try { Exec(db, $"ALTER TABLE {col.Item1} ADD COLUMN {col.Item2} {col.Item3}"); } catch {}
         }
@@ -596,20 +626,28 @@ static class DB
     public static List<object> GetApps(SqliteConnection db) {
         var list = new List<object>();
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,name,description,created_at FROM apps ORDER BY name";
+        c.CommandText = "SELECT id,name,description,created_at,slug FROM apps ORDER BY name";
         using var r = c.ExecuteReader();
         while (r.Read())
-            list.Add(new { id=r.GetString(0), name=r.GetString(1), description=r.GetString(2), createdAt=r.GetString(3) });
+            list.Add(new { id=r.GetString(0), name=r.GetString(1), description=r.GetString(2), createdAt=r.GetString(3), slug=r.GetString(4) });
         return list;
     }
 
-    public static void CreateApp(SqliteConnection db, string id, string name, string desc) {
+    public static void CreateApp(SqliteConnection db, string id, string name, string desc, string slug) {
         using var c = db.CreateCommand();
-        c.CommandText = "INSERT INTO apps(id,name,description,created_at) VALUES($id,$n,$d,$t)";
+        c.CommandText = "INSERT INTO apps(id,name,description,created_at,slug) VALUES($id,$n,$d,$t,$s)";
         c.Parameters.AddWithValue("$id", id); c.Parameters.AddWithValue("$n", name);
-        c.Parameters.AddWithValue("$d",  desc);
+        c.Parameters.AddWithValue("$d",  desc); c.Parameters.AddWithValue("$s", slug.ToLower());
         c.Parameters.AddWithValue("$t",  DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
         c.ExecuteNonQuery();
+    }
+
+    public static string GetAppSlug(SqliteConnection db, string appId) {
+        if (string.IsNullOrEmpty(appId)) return "";
+        using var c = db.CreateCommand();
+        c.CommandText = "SELECT slug FROM apps WHERE id=$id";
+        c.Parameters.AddWithValue("$id", appId);
+        return (string?)c.ExecuteScalar() ?? "";
     }
 
     public static void DeleteApp(SqliteConnection db, string id) {
@@ -627,7 +665,7 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = @"SELECT l.id,l.label,l.type,l.expiry,l.issued,l.revoked,l.max_activations,
                                  l.duration_days,l.activated_at,l.app_id,l.notes,
-                                 a.name, COUNT(m.id) as seats
+                                 a.name, COUNT(m.id) as seats, a.slug
                           FROM licenses l
                           LEFT JOIN apps a ON a.id=l.app_id
                           LEFT JOIN machines m ON m.license_id=l.id AND m.status='active'
@@ -660,6 +698,7 @@ static class DB
                 activatedAt=actAt, appId=r.GetString(9), notes=r.GetString(10),
                 appName=r.IsDBNull(11)?"":r.GetString(11),
                 activeSeats=r.GetInt32(12),
+                appSlug=r.IsDBNull(13)?"":r.GetString(13),
                 daysLeft, expiryDisplay=dispExpiry
             });
         }

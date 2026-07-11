@@ -1010,7 +1010,8 @@ namespace WdpMgr
                 string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
                             + "\"fingerprint\":\"" + fp + "\","
                             + "\"hostname\":\"" + host + "\","
-                            + "\"windowsUser\":\"" + winUser + "\"}";
+                            + "\"windowsUser\":\"" + winUser + "\","
+                            + "\"appId\":\"wdpmgr\"}";
                 var wc = new System.Net.WebClient();
                 wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
                 wc.Encoding = Encoding.UTF8;
