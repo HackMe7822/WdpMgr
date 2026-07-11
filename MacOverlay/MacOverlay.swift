@@ -199,7 +199,7 @@ func checkIn(_ lic: LicenseData) -> String {
 
 func getFingerprint() -> String {
     // Use IOPlatformUUID (hardware UUID) as fingerprint
-    let service = IOServiceGetMatchingService(kIOMasterPortDefault,
+    let service = IOServiceGetMatchingService(kIOMainPortDefault,
         IOServiceMatching("IOPlatformExpertDevice") as CFDictionary)
     defer { IOObjectRelease(service) }
     let uuid = IORegistryEntryCreateCFProperty(service,
@@ -207,7 +207,7 @@ func getFingerprint() -> String {
         .takeRetainedValue() as? String ?? "unknown"
     if let d = (uuid + "|macoverlay").data(using: .utf8) {
         var hash = [UInt8](repeating: 0, count: Int(CC_SHA256_DIGEST_LENGTH))
-        d.withUnsafeBytes { CC_SHA256($0.baseAddress, CC_LONG(d.count), &hash) }
+        d.withUnsafeBytes { ptr in _ = CC_SHA256(ptr.baseAddress, CC_LONG(d.count), &hash) }
         return hash.prefix(16).map { String(format:"%02x",$0) }.joined()
     }
     return "unknown"
