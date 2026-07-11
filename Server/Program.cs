@@ -500,6 +500,18 @@ static class DB
             try { Exec(db, $"ALTER TABLE {col.Item1} ADD COLUMN {col.Item2} {col.Item3}"); } catch {}
         }
         RsaSvc.EnsureKeys(db);
+        // Seed built-in apps (safe to re-run — skips if slug already exists)
+        foreach (var a in new[]{
+            ("wdpmgr",    "WdpMgr",     "Windows display policy manager — DLL injection + screen capture bypass"),
+            ("winoverlay","WinOverlay",  "Windows overlay browser — invisible to screen capture/recording"),
+            ("macoverlay","MacOverlay",  "Mac overlay browser — invisible to screen sharing"),
+        }) {
+            using var chk = db.CreateCommand();
+            chk.CommandText = "SELECT COUNT(*) FROM apps WHERE slug=$s";
+            chk.Parameters.AddWithValue("$s", a.Item1);
+            if ((long)chk.ExecuteScalar()! == 0)
+                CreateApp(db, Guid.NewGuid().ToString(), a.Item2, a.Item3, a.Item1);
+        }
         // Seed first admin user
         if (!string.IsNullOrEmpty(firstUser) && !string.IsNullOrEmpty(firstPass) && !UserExists(db, firstUser)) {
             string id = Guid.NewGuid().ToString();
