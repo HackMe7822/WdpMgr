@@ -101,7 +101,28 @@ function api(method, path, body) {
   }));
 }
 
-function loadAll() { loadDashboard(); }
+let _allApps = [];
+function loadAppsCache() {
+  api('GET','/api/admin/apps').then(apps => {
+    _allApps = apps;
+    // Refresh dropdown if modal is open
+    const sel = document.getElementById('nl-app');
+    if (sel && !document.getElementById('modal-lic').classList.contains('hidden'))
+      populateAppDropdown(sel.value);
+  }).catch(()=>{});
+}
+function populateAppDropdown(selectedId='') {
+  const sel = document.getElementById('nl-app');
+  if (!_allApps.length) {
+    sel.innerHTML = '<option value="">⚠ No apps — go to Apps tab and add first</option>';
+    return;
+  }
+  sel.innerHTML = '<option value="">— select an app —</option>' +
+    _allApps.map(a => `<option value="${a.id}"${a.id===selectedId?' selected':''}>${e(a.name)} (${e(a.slug)})</option>`).join('');
+  if (selectedId) sel.value = selectedId;
+}
+
+function loadAll() { loadDashboard(); loadAppsCache(); }
 
 // Enter app on load if session was restored
 document.addEventListener('DOMContentLoaded', () => { if (API_KEY) enterApp(); });
@@ -190,7 +211,7 @@ function renderLicenses(list) {
       <td>
         ${!l.revoked
           ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>${l.appSlug==='macoverlay'?'⬇ .lic':'⬇ EXE'}</button>
-             <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}")'>✏</button>
+             <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}","${e(l.appId||'')}")'>✏</button>
              <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Revoke</button>
              <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
           : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
@@ -266,6 +287,7 @@ function renderMachines(list) {
 // ── Apps ──────────────────────────────────────────────────────────────────────
 function loadApps() {
   api('GET','/api/admin/apps').then(list => {
+    _allApps = list;
     const tbody = document.getElementById('apps-body');
     if (!list.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No apps yet. Add WdpMgr, WinOverlay, MacOverlay etc.</td></tr>'; return; }
     tbody.innerHTML = list.map(a => `<tr>
@@ -379,12 +401,7 @@ function openLicModal() {
   document.getElementById('nl-unlimited').checked = false;
   document.getElementById('nl-notes').value    = '';
   onLicTypeChange();
-  // Populate app dropdown
-  api('GET','/api/admin/apps').then(apps => {
-    const sel = document.getElementById('nl-app');
-    sel.innerHTML = '<option value="">— any app —</option>' +
-      apps.map(a => `<option value="${a.id}">${e(a.name)} (${e(a.slug)})</option>`).join('');
-  }).catch(()=>{});
+  populateAppDropdown();
   nav('licenses', document.querySelector('[data-view=licenses]'));
   openModal('modal-lic');
 }
@@ -412,6 +429,7 @@ function submitLicModal() {
   const appId  = document.getElementById('nl-app').value;
   const notes  = document.getElementById('nl-notes').value.trim();
   if (!label) { toast('Label required', true); return; }
+  if (!appId) { toast('Please select an App for this license', true); return; }
   if ((type==='temp'||type==='hr') && type!=='lifetime' && !expiry && type==='temp') { toast('Expiry date required', true); return; }
   if (type==='days' && days < 1) { toast('Duration must be >= 1 hour', true); return; }
   api('POST','/api/admin/licenses',{label,type,expiry,durationDays:days,maxActivations:maxAct,appId,notes}).then(()=>{
@@ -421,7 +439,7 @@ function submitLicModal() {
 
 let editLicId = null;
 
-function openEditModal(id, label, type, expiry, durationDays, maxAct, notes) {
+function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, appId) {
   editLicId = id;
   document.querySelector('#modal-lic .modal-header h2').textContent = 'Edit License';
   document.querySelector('#modal-lic .modal-footer .btn-primary').textContent = 'Save';
@@ -436,6 +454,7 @@ function openEditModal(id, label, type, expiry, durationDays, maxAct, notes) {
   document.getElementById('nl-maxact').disabled     = unlimited;
   document.getElementById('nl-notes').value   = notes || '';
   onLicTypeChange();
+  populateAppDropdown(appId || '');
   openModal('modal-lic');
 }
 
