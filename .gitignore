@@ -9,6 +9,9 @@ ClearDisplayAffinityInstaller.exe
 wdp.lic
 wdpmgr.db
 publish/
+publish_fd/
 */bin/
 */obj/
+**/bin/
+**/obj/
 /etc/wdpmgr.env
