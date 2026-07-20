@@ -267,6 +267,7 @@ class OverlayForm : Form
     private System.Windows.Forms.Timer _checkinTimer;
     private TextBox    _urlBox;
     private byte       _opacity = 240;
+    internal CoreWebView2Environment _wv2Env;
 
     public OverlayForm(LicenseData lic)
     {
@@ -347,8 +348,22 @@ class OverlayForm : Form
     {
         try
         {
-            await _wv2.EnsureCoreWebView2Async(null);
-            _wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; _wv2.CoreWebView2.Navigate(e.Uri); };
+            // Persistent profile so cookies/logins survive across runs
+            string profileDir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "WinOverlay_profile");
+            _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
+            await _wv2.EnsureCoreWebView2Async(_wv2Env);
+
+            var cfg = _wv2.CoreWebView2.Settings;
+            cfg.IsScriptEnabled              = true;
+            cfg.AreDefaultScriptDialogsEnabled   = true;
+            cfg.IsWebMessageEnabled              = true;
+            cfg.AreDefaultContextMenusEnabled    = true;
+            cfg.IsStatusBarEnabled               = false;
+            cfg.AreBrowserAcceleratorKeysEnabled = false;
+
+            _wv2.CoreWebView2.NewWindowRequested += OnPopup;
             _wv2.NavigationCompleted += (s, e) => {
                 try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); } catch { }
             };
@@ -360,6 +375,21 @@ class OverlayForm : Form
             try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
             if (!IsDisposed) BeginInvoke((Action)UseWebBrowser);
         }
+    }
+
+    async void OnPopup(object sender, CoreWebView2NewWindowRequestedEventArgs e)
+    {
+        var deferral = e.GetDeferral();
+        try
+        {
+            var popup = new WinOverlayPopup();
+            popup.Show(this);
+            await popup.InitAsync(_wv2Env);
+            e.NewWindow = popup.Wv2.CoreWebView2;
+            e.Handled   = true;
+        }
+        catch { e.Handled = false; }
+        finally { deferral.Complete(); }
     }
 
     void UseWebBrowser()
@@ -417,5 +447,38 @@ class OverlayForm : Form
     {
         _checkinTimer?.Stop();
         base.OnFormClosed(e);
+    }
+}
+
+// ── Popup window (login / OAuth flows) ───────────────────────────────────────
+class WinOverlayPopup : Form
+{
+    internal WebView2 Wv2 { get; } = new WebView2 { Dock = DockStyle.Fill };
+
+    public WinOverlayPopup()
+    {
+        Text            = "WinOverlay";
+        Size            = new Size(520, 640);
+        MinimumSize     = new Size(400, 400);
+        StartPosition   = FormStartPosition.CenterScreen;
+        FormBorderStyle = FormBorderStyle.SizableToolWindow;
+        TopMost         = true;
+        Controls.Add(Wv2);
+    }
+
+    public async System.Threading.Tasks.Task InitAsync(CoreWebView2Environment env)
+    {
+        await Wv2.EnsureCoreWebView2Async(env);
+        Wv2.CoreWebView2.Settings.IsScriptEnabled            = true;
+        Wv2.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = true;
+        Wv2.CoreWebView2.WindowCloseRequested += (s, e) => { if (!IsDisposed) BeginInvoke((Action)Close); };
+        // Nested popups just navigate in this same window
+        Wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; Wv2.CoreWebView2.Navigate(e.Uri); };
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE);
     }
 }
