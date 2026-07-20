@@ -84,13 +84,13 @@ static class Program
     // ── Bundle extraction ─────────────────────────────────────────────────────
     static void ExtractBundledDlls()
     {
+        var errors = new System.Text.StringBuilder();
         try
         {
-            Wv2Dir = Path.Combine(Path.GetTempPath(), "WinOverlay_wv2_" + IntPtr.Size * 8);
+            Wv2Dir = Path.Combine(Path.GetTempPath(), "WinOverlay_wv2_64");
             Directory.CreateDirectory(Wv2Dir);
 
             var asm = Assembly.GetExecutingAssembly();
-            // Resources: "WinOverlay.WebView2Loader.dll", "WinOverlay.WV2Core.dll", "WinOverlay.WV2WinForms.dll"
             var map = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 { "WinOverlay.WebView2Loader.dll",  "WebView2Loader.dll" },
@@ -104,17 +104,16 @@ static class Program
                 if (!File.Exists(dest))
                 {
                     using var s = asm.GetManifestResourceStream(kv.Key);
-                    if (s == null) continue;
+                    if (s == null) { errors.AppendLine("MISSING resource: " + kv.Key); continue; }
                     using var f = File.Create(dest);
                     s.CopyTo(f);
                 }
             }
 
-            // Native DLL: add to search path AND pre-load it so P/Invoke finds it
             NativeMethods.SetDllDirectory(Wv2Dir);
-            NativeMethods.LoadLibrary(Path.Combine(Wv2Dir, "WebView2Loader.dll"));
+            var hLib = NativeMethods.LoadLibrary(Path.Combine(Wv2Dir, "WebView2Loader.dll"));
+            if (hLib == IntPtr.Zero) errors.AppendLine("LoadLibrary WebView2Loader.dll FAILED");
 
-            // Managed DLLs: intercept assembly loading
             AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
             {
                 try
@@ -126,7 +125,11 @@ static class Program
                 catch { return null; }
             };
         }
-        catch { }
+        catch (Exception ex) { errors.AppendLine("ExtractBundledDlls exception: " + ex.Message); }
+
+        if (errors.Length > 0)
+            MessageBox.Show("WebView2 setup issue (will use IE11 fallback):\n\n" + errors,
+                "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
     // ── Read license ──────────────────────────────────────────────────────────
@@ -288,7 +291,7 @@ class OverlayForm : Form
 
         if (hasWv2)
         {
-            Text = "WinOverlay [Chrome]";
+            Text = "WinOverlay [Chrome " + (wv2Ver ?? "") + "]";
             _wv2 = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_wv2);
             _toolbar.BringToFront();
@@ -296,7 +299,12 @@ class OverlayForm : Form
         }
         else
         {
-            Text = "WinOverlay [IE11 — install Edge for modern sites]";
+            Text = "WinOverlay [IE11]";
+            MessageBox.Show(
+                "WebView2 / Edge not found on this machine.\n\n" +
+                "Modern sites (ChatGPT, Google etc.) will not render correctly.\n\n" +
+                "Fix: install Microsoft Edge from another machine and run the installer here.",
+                "WinOverlay — IE11 mode", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             UseWebBrowser();
         }
 
