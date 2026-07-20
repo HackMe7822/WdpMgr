@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows.Forms;
+using Microsoft.Win32;
 
 // ── Win32 ─────────────────────────────────────────────────────────────────────
 static class NativeMethods
@@ -37,6 +38,15 @@ static class Program
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        // Force IE11 rendering engine (default is IE7 which breaks modern sites)
+        try {
+            using var key = Registry.CurrentUser.OpenSubKey(
+                @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION", true)
+                ?? Registry.CurrentUser.CreateSubKey(
+                @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION");
+            key?.SetValue(Path.GetFileName(Application.ExecutablePath), 11001, RegistryValueKind.DWord);
+        } catch { }
 
         LicenseData lic = ReadEmbeddedLicense() ?? ReadLicFile();
         if (lic == null) { Msg("No valid license found.\n\nPlace a .lic file next to WinOverlay.exe or use a licensed EXE."); return; }
@@ -276,9 +286,20 @@ class OverlayForm : Form
     void Navigate(string url)
     {
         if (string.IsNullOrWhiteSpace(url)) return;
-        if (!url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
-            !url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        url = url.Trim();
+        if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+            url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            // already a full URL
+        }
+        else if (!url.Contains(" ") && url.Contains("."))
+        {
             url = "https://" + url;
+        }
+        else
+        {
+            url = "https://www.google.com/search?q=" + Uri.EscapeDataString(url);
+        }
         _urlBox.Text = url;
         _browser.Navigate(url);
     }
