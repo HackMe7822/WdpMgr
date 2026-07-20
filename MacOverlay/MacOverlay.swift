@@ -300,8 +300,16 @@ class OverlayWindow: NSPanel {
     }
 
     @objc private func navigateFromField() {
-        var url = urlField.stringValue.trimmingCharacters(in: .whitespaces)
-        if !url.hasPrefix("http://") && !url.hasPrefix("https://") && !url.hasPrefix("about:") { url = "https://" + url }
+        var raw = urlField.stringValue.trimmingCharacters(in: .whitespaces)
+        let url: String
+        if raw.hasPrefix("http://") || raw.hasPrefix("https://") || raw.hasPrefix("about:") {
+            url = raw
+        } else if !raw.contains(" ") && raw.contains(".") {
+            url = "https://" + raw
+        } else {
+            let q = raw.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? raw
+            url = "https://www.google.com/search?q=\(q)"
+        }
         if let u = URL(string: url) { webView.load(URLRequest(url: u)) }
     }
 
