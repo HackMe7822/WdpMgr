@@ -2,10 +2,14 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Net;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
 // ── Win32 ─────────────────────────────────────────────────────────────────────
@@ -16,10 +20,12 @@ static class NativeMethods
     public const int  WS_EX_LAYERED          = 0x80000;
     public const uint LWA_ALPHA              = 0x00000002;
 
-    [DllImport("user32.dll")] public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
-    [DllImport("user32.dll")] public static extern int  GetWindowLong(IntPtr hWnd, int nIndex);
-    [DllImport("user32.dll")] public static extern int  SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-    [DllImport("user32.dll")] public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
+    [DllImport("user32.dll")]   public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+    [DllImport("user32.dll")]   public static extern int  GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll")]   public static extern int  SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+    [DllImport("user32.dll")]   public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern bool SetDllDirectory(string path);
 }
 
 // ── License ───────────────────────────────────────────────────────────────────
@@ -32,13 +38,15 @@ class LicenseData
 // ── Program ───────────────────────────────────────────────────────────────────
 static class Program
 {
+    internal static string Wv2Dir; // temp dir holding extracted WebView2 DLLs
+
     [STAThread]
     static void Main()
     {
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // Force IE11 rendering mode for the WebBrowser control
+        // IE11 fallback emulation key (used only if WebView2 init fails)
         try {
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION", true)
@@ -46,6 +54,9 @@ static class Program
                 @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION");
             key?.SetValue(Path.GetFileName(Application.ExecutablePath), 11001, RegistryValueKind.DWord);
         } catch { }
+
+        // Extract bundled WebView2 DLLs BEFORE any WebView2 type is JIT-compiled
+        ExtractBundledDlls();
 
         LicenseData lic = ReadEmbeddedLicense() ?? ReadLicFile();
         if (lic == null) { Msg("No valid license found.\n\nPlace a .lic file next to WinOverlay.exe or use a licensed EXE."); return; }
@@ -58,10 +69,62 @@ static class Program
         if (status == "expired")  { Msg("License has expired."); return; }
         if (status == "invalid")  { Msg("License rejected by server."); return; }
 
-        Application.Run(new OverlayForm(lic));
+        // RunForm is in a separate non-inlined method so WebView2 types are only
+        // JIT-compiled AFTER ExtractBundledDlls() has registered the AssemblyResolve hook
+        RunForm(lic);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void RunForm(LicenseData lic) => Application.Run(new OverlayForm(lic));
+
     static void Msg(string m) => MessageBox.Show(m, "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+    // ── Bundle extraction ─────────────────────────────────────────────────────
+    static void ExtractBundledDlls()
+    {
+        try
+        {
+            Wv2Dir = Path.Combine(Path.GetTempPath(), "WinOverlay_wv2_" + IntPtr.Size * 8);
+            Directory.CreateDirectory(Wv2Dir);
+
+            var asm = Assembly.GetExecutingAssembly();
+            // Resources: "WinOverlay.WebView2Loader.dll", "WinOverlay.WV2Core.dll", "WinOverlay.WV2WinForms.dll"
+            var map = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "WinOverlay.WebView2Loader.dll",  "WebView2Loader.dll" },
+                { "WinOverlay.WV2Core.dll",         "Microsoft.Web.WebView2.Core.dll" },
+                { "WinOverlay.WV2WinForms.dll",     "Microsoft.Web.WebView2.WinForms.dll" },
+            };
+
+            foreach (var kv in map)
+            {
+                string dest = Path.Combine(Wv2Dir, kv.Value);
+                if (!File.Exists(dest))
+                {
+                    using var s = asm.GetManifestResourceStream(kv.Key);
+                    if (s == null) continue;
+                    using var f = File.Create(dest);
+                    s.CopyTo(f);
+                }
+            }
+
+            // Native DLL: point loader to our temp dir
+            NativeMethods.SetDllDirectory(Wv2Dir);
+
+            // Managed DLLs: intercept assembly loading
+            AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
+            {
+                try
+                {
+                    string name = new AssemblyName(e.Name).Name;
+                    string path = Path.Combine(Wv2Dir, name + ".dll");
+                    return File.Exists(path) ? Assembly.LoadFile(path) : null;
+                }
+                catch { return null; }
+            };
+        }
+        catch { }
+    }
 
     // ── Read license ──────────────────────────────────────────────────────────
     static LicenseData ReadEmbeddedLicense()
@@ -192,12 +255,15 @@ static class Program
 // ── Overlay Form ──────────────────────────────────────────────────────────────
 class OverlayForm : Form
 {
-    private WebBrowser  _browser;
-    private Panel       _toolbar;
+    private WebView2   _wv2;
+    private WebBrowser _wb;
+    private bool       _wv2Ready;
+    private string     _pendingUrl;
+    private Panel      _toolbar;
     private LicenseData _lic;
     private System.Windows.Forms.Timer _checkinTimer;
-    private TextBox     _urlBox;
-    private byte        _opacity = 240;
+    private TextBox    _urlBox;
+    private byte       _opacity = 240;
 
     public OverlayForm(LicenseData lic)
     {
@@ -212,11 +278,20 @@ class OverlayForm : Form
 
         BuildToolbar();
 
-        _browser = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
-        _browser.Navigated += (s, e) => { try { if (_browser?.Url != null) _urlBox.Text = _browser.Url.ToString(); } catch { } };
+        bool hasWv2 = false;
+        try { CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = true; } catch { }
 
-        Controls.Add(_browser);
-        _toolbar.BringToFront();
+        if (hasWv2)
+        {
+            _wv2 = new WebView2 { Dock = DockStyle.Fill };
+            Controls.Add(_wv2);
+            _toolbar.BringToFront();
+            _ = InitWv2Async();
+        }
+        else
+        {
+            UseWebBrowser();
+        }
 
         _checkinTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
         _checkinTimer.Tick += (s, e) =>
@@ -246,21 +321,48 @@ class OverlayForm : Form
         btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
         btnClose.Click  += (s, e) => Close();
 
-        _toolbar.Resize += (s, e) => {
-            _urlBox.Width  = _toolbar.Width - 140;
-            btnGo.Left     = _urlBox.Right + 4;   btnGo.Top     = 4;
-            btnOpDown.Left = btnGo.Right + 4;      btnOpDown.Top = 4;
-            btnOpUp.Left   = btnOpDown.Right + 2;  btnOpUp.Top   = 4;
-            btnClose.Left  = btnOpUp.Right + 6;    btnClose.Top  = 4;
-        };
-        _urlBox.Width  = 900;
-        btnGo.Left     = _urlBox.Right + 4;   btnGo.Top     = 4;
-        btnOpDown.Left = btnGo.Right + 4;      btnOpDown.Top = 4;
-        btnOpUp.Left   = btnOpDown.Right + 2;  btnOpUp.Top   = 4;
-        btnClose.Left  = btnOpUp.Right + 6;    btnClose.Top  = 4;
+        _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnOpDown, btnOpUp, btnClose);
+        LayoutBtns(btnGo, btnOpDown, btnOpUp, btnClose);
 
         _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnOpDown, btnOpUp, btnClose });
         Controls.Add(_toolbar);
+    }
+
+    void LayoutBtns(Button go, Button od, Button ou, Button cl)
+    {
+        _urlBox.Width = _toolbar.Width - 140;
+        go.Left = _urlBox.Right + 4;  go.Top = 4;
+        od.Left = go.Right + 4;       od.Top = 4;
+        ou.Left = od.Right + 2;       ou.Top = 4;
+        cl.Left = ou.Right + 6;       cl.Top = 4;
+    }
+
+    async System.Threading.Tasks.Task InitWv2Async()
+    {
+        try
+        {
+            await _wv2.EnsureCoreWebView2Async(null);
+            _wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; _wv2.CoreWebView2.Navigate(e.Uri); };
+            _wv2.NavigationCompleted += (s, e) => {
+                try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); } catch { }
+            };
+            _wv2Ready = true;
+            if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
+        }
+        catch
+        {
+            try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
+            if (!IsDisposed) BeginInvoke((Action)UseWebBrowser);
+        }
+    }
+
+    void UseWebBrowser()
+    {
+        _wb = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
+        _wb.Navigated += (s, e) => { try { if (_wb?.Url != null) _urlBox.Text = _wb.Url.ToString(); } catch { } };
+        Controls.Add(_wb);
+        _toolbar.BringToFront();
+        if (_pendingUrl != null) { _wb.Navigate(_pendingUrl); _pendingUrl = null; }
     }
 
     Button MakeBtn(string text, int width, Color bg) =>
@@ -288,7 +390,13 @@ class OverlayForm : Form
             url = "https://www.google.com/search?q=" + Uri.EscapeDataString(url);
 
         _urlBox.Text = url;
-        _browser.Navigate(url);
+
+        if (_wv2 != null)
+        { if (_wv2Ready) _wv2.CoreWebView2.Navigate(url); else _pendingUrl = url; }
+        else if (_wb != null)
+            _wb.Navigate(url);
+        else
+            _pendingUrl = url;
     }
 
     void SetOpacity(int val)
