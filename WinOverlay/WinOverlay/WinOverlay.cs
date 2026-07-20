@@ -5,10 +5,7 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using Microsoft.Web.WebView2.Core;
-using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
 // ── Win32 ─────────────────────────────────────────────────────────────────────
@@ -41,7 +38,7 @@ static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // IE11 emulation registry — used only if WebView2 is unavailable
+        // Force IE11 rendering mode for the WebBrowser control
         try {
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION", true)
@@ -195,15 +192,12 @@ static class Program
 // ── Overlay Form ──────────────────────────────────────────────────────────────
 class OverlayForm : Form
 {
-    private WebView2   _wv2;
-    private WebBrowser _wb;
-    private bool       _wv2Ready = false;
-    private string     _pendingUrl;
-    private Panel      _toolbar;
+    private WebBrowser  _browser;
+    private Panel       _toolbar;
     private LicenseData _lic;
     private System.Windows.Forms.Timer _checkinTimer;
-    private TextBox    _urlBox;
-    private byte       _opacity = 240;
+    private TextBox     _urlBox;
+    private byte        _opacity = 240;
 
     public OverlayForm(LicenseData lic)
     {
@@ -218,23 +212,12 @@ class OverlayForm : Form
 
         BuildToolbar();
 
-        // Try WebView2 (Chromium) first; fall back to WebBrowser (IE11) if unavailable
-        bool hasWv2 = false;
-        try { CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = true; } catch { }
+        _browser = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
+        _browser.Navigated += (s, e) => { try { if (_browser?.Url != null) _urlBox.Text = _browser.Url.ToString(); } catch { } };
 
-        if (hasWv2)
-        {
-            _wv2 = new WebView2 { Dock = DockStyle.Fill };
-            Controls.Add(_wv2);
-            _toolbar.BringToFront();
-            _ = InitWv2Async();
-        }
-        else
-        {
-            UseWebBrowser();
-        }
+        Controls.Add(_browser);
+        _toolbar.BringToFront();
 
-        // Periodic check-in
         _checkinTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
         _checkinTimer.Tick += (s, e) =>
         {
@@ -263,48 +246,21 @@ class OverlayForm : Form
         btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
         btnClose.Click  += (s, e) => Close();
 
-        Action layoutBtns = () => {
-            _urlBox.Width   = _toolbar.Width - 140;
-            btnGo.Left      = _urlBox.Right  + 4;  btnGo.Top     = 4;
-            btnOpDown.Left  = btnGo.Right    + 4;  btnOpDown.Top = 4;
-            btnOpUp.Left    = btnOpDown.Right + 2; btnOpUp.Top   = 4;
-            btnClose.Left   = btnOpUp.Right  + 6;  btnClose.Top  = 4;
+        _toolbar.Resize += (s, e) => {
+            _urlBox.Width  = _toolbar.Width - 140;
+            btnGo.Left     = _urlBox.Right + 4;   btnGo.Top     = 4;
+            btnOpDown.Left = btnGo.Right + 4;      btnOpDown.Top = 4;
+            btnOpUp.Left   = btnOpDown.Right + 2;  btnOpUp.Top   = 4;
+            btnClose.Left  = btnOpUp.Right + 6;    btnClose.Top  = 4;
         };
-        _toolbar.Resize += (s, e) => layoutBtns();
-        layoutBtns();
+        _urlBox.Width  = 900;
+        btnGo.Left     = _urlBox.Right + 4;   btnGo.Top     = 4;
+        btnOpDown.Left = btnGo.Right + 4;      btnOpDown.Top = 4;
+        btnOpUp.Left   = btnOpDown.Right + 2;  btnOpUp.Top   = 4;
+        btnClose.Left  = btnOpUp.Right + 6;    btnClose.Top  = 4;
 
         _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnOpDown, btnOpUp, btnClose });
         Controls.Add(_toolbar);
-    }
-
-    async Task InitWv2Async()
-    {
-        try
-        {
-            await _wv2.EnsureCoreWebView2Async(null);
-            _wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; _wv2.CoreWebView2.Navigate(e.Uri); };
-            _wv2.NavigationCompleted += (s, e) => {
-                try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); }
-                catch { }
-            };
-            _wv2Ready = true;
-            if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
-        }
-        catch
-        {
-            // WebView2 init failed — swap to WebBrowser
-            try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
-            if (!IsDisposed) BeginInvoke((Action)UseWebBrowser);
-        }
-    }
-
-    void UseWebBrowser()
-    {
-        _wb = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
-        _wb.Navigated += (s, e) => { try { if (_wb?.Url != null) _urlBox.Text = _wb.Url.ToString(); } catch { } };
-        Controls.Add(_wb);
-        _toolbar.BringToFront();
-        if (_pendingUrl != null) { _wb.Navigate(_pendingUrl); _pendingUrl = null; }
     }
 
     Button MakeBtn(string text, int width, Color bg) =>
@@ -325,20 +281,14 @@ class OverlayForm : Form
         url = url.Trim();
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        { /* full URL, use as-is */ }
+        { /* full URL */ }
         else if (!url.Contains(" ") && url.Contains("."))
             url = "https://" + url;
         else
             url = "https://www.google.com/search?q=" + Uri.EscapeDataString(url);
 
         _urlBox.Text = url;
-
-        if (_wv2 != null)
-        { if (_wv2Ready) _wv2.CoreWebView2.Navigate(url); else _pendingUrl = url; }
-        else if (_wb != null)
-            _wb.Navigate(url);
-        else
-            _pendingUrl = url;
+        _browser.Navigate(url);
     }
 
     void SetOpacity(int val)
