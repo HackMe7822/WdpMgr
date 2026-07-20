@@ -26,6 +26,8 @@ static class NativeMethods
     [DllImport("user32.dll")]   public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SetDllDirectory(string path);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr LoadLibrary(string path);
 }
 
 // ── License ───────────────────────────────────────────────────────────────────
@@ -108,8 +110,9 @@ static class Program
                 }
             }
 
-            // Native DLL: point loader to our temp dir
+            // Native DLL: add to search path AND pre-load it so P/Invoke finds it
             NativeMethods.SetDllDirectory(Wv2Dir);
+            NativeMethods.LoadLibrary(Path.Combine(Wv2Dir, "WebView2Loader.dll"));
 
             // Managed DLLs: intercept assembly loading
             AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
@@ -279,10 +282,12 @@ class OverlayForm : Form
         BuildToolbar();
 
         bool hasWv2 = false;
-        try { CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = true; } catch { }
+        string wv2Ver = null;
+        try { wv2Ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = !string.IsNullOrEmpty(wv2Ver); } catch { }
 
         if (hasWv2)
         {
+            Text = "WinOverlay [Chrome]";
             _wv2 = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_wv2);
             _toolbar.BringToFront();
@@ -290,6 +295,7 @@ class OverlayForm : Form
         }
         else
         {
+            Text = "WinOverlay [IE11 — install Edge for modern sites]";
             UseWebBrowser();
         }
 
