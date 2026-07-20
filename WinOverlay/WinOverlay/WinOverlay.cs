@@ -5,8 +5,10 @@ using System.Net;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.Core;
+using Microsoft.Web.WebView2.WinForms;
 using Microsoft.Win32;
 
 // ── Win32 ─────────────────────────────────────────────────────────────────────
@@ -39,7 +41,7 @@ static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // Force IE11 rendering engine (default is IE7 which breaks modern sites)
+        // IE11 emulation registry — used only if WebView2 is unavailable
         try {
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION", true)
@@ -56,8 +58,8 @@ static class Program
 
         string status = CheckIn(lic);
         if (status == "revoked") { Msg("License has been revoked."); return; }
-        if (status == "expired") { Msg("License has expired."); return; }
-        if (status == "invalid") { Msg("License rejected by server."); return; }
+        if (status == "expired")  { Msg("License has expired."); return; }
+        if (status == "invalid")  { Msg("License rejected by server."); return; }
 
         Application.Run(new OverlayForm(lic));
     }
@@ -193,11 +195,15 @@ static class Program
 // ── Overlay Form ──────────────────────────────────────────────────────────────
 class OverlayForm : Form
 {
-    private WebBrowser  _browser;
+    private WebView2   _wv2;
+    private WebBrowser _wb;
+    private bool       _wv2Ready = false;
+    private string     _pendingUrl;
+    private Panel      _toolbar;
     private LicenseData _lic;
     private System.Windows.Forms.Timer _checkinTimer;
-    private TextBox     _urlBox;
-    private byte        _opacity = 240;
+    private TextBox    _urlBox;
+    private byte       _opacity = 240;
 
     public OverlayForm(LicenseData lic)
     {
@@ -210,50 +216,25 @@ class OverlayForm : Form
         TopMost         = true;
         BackColor       = Color.Black;
 
-        // Toolbar
-        var toolbar = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Color.FromArgb(30, 30, 30) };
+        BuildToolbar();
 
-        _urlBox = new TextBox { Left = 8, Top = 6, Width = 900, Height = 24, BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
-        _urlBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { Navigate(_urlBox.Text.Trim()); e.SuppressKeyPress = true; } };
+        // Try WebView2 (Chromium) first; fall back to WebBrowser (IE11) if unavailable
+        bool hasWv2 = false;
+        try { CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = true; } catch { }
 
-        var btnGo = MakeBtn("Go", 40, Color.FromArgb(60, 60, 200));
-        btnGo.Click += (s, e) => Navigate(_urlBox.Text.Trim());
-
-        var btnOpDown = MakeBtn("−", 28, Color.FromArgb(80, 80, 80));
-        btnOpDown.Click += (s, e) => SetOpacity(Math.Max(40, _opacity - 20));
-
-        var btnOpUp = MakeBtn("+", 28, Color.FromArgb(80, 80, 80));
-        btnOpUp.Click += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
-
-        var btnClose = MakeBtn("✕", 28, Color.FromArgb(180, 40, 40));
-        btnClose.Click += (s, e) => Close();
-
-        // Position controls
-        toolbar.Resize += (s, e) =>
+        if (hasWv2)
         {
-            _urlBox.Width    = toolbar.Width - 140;
-            btnGo.Left       = _urlBox.Right + 4;
-            btnOpDown.Left   = btnGo.Right + 4;
-            btnOpUp.Left     = btnOpDown.Right + 2;
-            btnClose.Left    = btnOpUp.Right + 6;
-        };
-        _urlBox.Width    = 900;
-        btnGo.Left       = _urlBox.Right + 4; btnGo.Top = 4;
-        btnOpDown.Left   = btnGo.Right + 4;   btnOpDown.Top = 4;
-        btnOpUp.Left     = btnOpDown.Right + 2; btnOpUp.Top = 4;
-        btnClose.Left    = btnOpUp.Right + 6;  btnClose.Top = 4;
+            _wv2 = new WebView2 { Dock = DockStyle.Fill };
+            Controls.Add(_wv2);
+            _toolbar.BringToFront();
+            _ = InitWv2Async();
+        }
+        else
+        {
+            UseWebBrowser();
+        }
 
-        toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnOpDown, btnOpUp, btnClose });
-
-        // Browser — built-in, zero dependencies
-        _browser = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
-        _browser.Navigated += (s, e) => { if (_browser.Url != null) _urlBox.Text = _browser.Url.ToString(); };
-
-        Controls.Add(_browser);
-        Controls.Add(toolbar);
-        toolbar.BringToFront();
-
-        // Check-in timer every 5 min
+        // Periodic check-in
         _checkinTimer = new System.Windows.Forms.Timer { Interval = 5 * 60 * 1000 };
         _checkinTimer.Tick += (s, e) =>
         {
@@ -264,19 +245,74 @@ class OverlayForm : Form
         _checkinTimer.Start();
     }
 
-    Button MakeBtn(string text, int width, Color bg)
+    void BuildToolbar()
     {
-        return new Button { Text = text, Width = width, Height = 28, BackColor = bg, ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
+        _toolbar = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = Color.FromArgb(30, 30, 30) };
+
+        _urlBox = new TextBox { Left = 8, Top = 6, Width = 900, Height = 24,
+            BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+        _urlBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { Navigate(_urlBox.Text.Trim()); e.SuppressKeyPress = true; } };
+
+        var btnGo     = MakeBtn("Go", 40, Color.FromArgb(60, 60, 200));
+        var btnOpDown = MakeBtn("−",  28, Color.FromArgb(80, 80, 80));
+        var btnOpUp   = MakeBtn("+",  28, Color.FromArgb(80, 80, 80));
+        var btnClose  = MakeBtn("✕",  28, Color.FromArgb(180, 40, 40));
+
+        btnGo.Click     += (s, e) => Navigate(_urlBox.Text.Trim());
+        btnOpDown.Click += (s, e) => SetOpacity(Math.Max(40,  _opacity - 20));
+        btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
+        btnClose.Click  += (s, e) => Close();
+
+        Action layoutBtns = () => {
+            _urlBox.Width   = _toolbar.Width - 140;
+            btnGo.Left      = _urlBox.Right  + 4;  btnGo.Top     = 4;
+            btnOpDown.Left  = btnGo.Right    + 4;  btnOpDown.Top = 4;
+            btnOpUp.Left    = btnOpDown.Right + 2; btnOpUp.Top   = 4;
+            btnClose.Left   = btnOpUp.Right  + 6;  btnClose.Top  = 4;
+        };
+        _toolbar.Resize += (s, e) => layoutBtns();
+        layoutBtns();
+
+        _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnOpDown, btnOpUp, btnClose });
+        Controls.Add(_toolbar);
     }
+
+    async Task InitWv2Async()
+    {
+        try
+        {
+            await _wv2.EnsureCoreWebView2Async(null);
+            _wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; _wv2.CoreWebView2.Navigate(e.Uri); };
+            _wv2.NavigationCompleted += (s, e) => {
+                try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); }
+                catch { }
+            };
+            _wv2Ready = true;
+            if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
+        }
+        catch
+        {
+            // WebView2 init failed — swap to WebBrowser
+            try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
+            if (!IsDisposed) BeginInvoke((Action)UseWebBrowser);
+        }
+    }
+
+    void UseWebBrowser()
+    {
+        _wb = new WebBrowser { Dock = DockStyle.Fill, ScriptErrorsSuppressed = true };
+        _wb.Navigated += (s, e) => { try { if (_wb?.Url != null) _urlBox.Text = _wb.Url.ToString(); } catch { } };
+        Controls.Add(_wb);
+        _toolbar.BringToFront();
+        if (_pendingUrl != null) { _wb.Navigate(_pendingUrl); _pendingUrl = null; }
+    }
+
+    Button MakeBtn(string text, int width, Color bg) =>
+        new Button { Text = text, Width = width, Height = 28, BackColor = bg, ForeColor = Color.White, FlatStyle = FlatStyle.Flat };
 
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        ApplyAffinity();
-    }
-
-    void ApplyAffinity()
-    {
         NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE);
         int ex = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
         NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_LAYERED);
@@ -289,19 +325,20 @@ class OverlayForm : Form
         url = url.Trim();
         if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
             url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-        {
-            // already a full URL
-        }
+        { /* full URL, use as-is */ }
         else if (!url.Contains(" ") && url.Contains("."))
-        {
             url = "https://" + url;
-        }
         else
-        {
             url = "https://www.google.com/search?q=" + Uri.EscapeDataString(url);
-        }
+
         _urlBox.Text = url;
-        _browser.Navigate(url);
+
+        if (_wv2 != null)
+        { if (_wv2Ready) _wv2.CoreWebView2.Navigate(url); else _pendingUrl = url; }
+        else if (_wb != null)
+            _wb.Navigate(url);
+        else
+            _pendingUrl = url;
     }
 
     void SetOpacity(int val)
