@@ -20,11 +20,17 @@ static class NativeMethods
     public const int  GWL_EXSTYLE            = -20;
     public const int  WS_EX_LAYERED          = 0x80000;
     public const uint LWA_ALPHA              = 0x00000002;
+    public const uint MOD_CONTROL            = 0x0002;
+    public const uint MOD_ALT               = 0x0001;
+    public const int  WM_HOTKEY             = 0x0312;
+    public const int  HOTKEY_TOGGLE         = 1;
 
     [DllImport("user32.dll")]   public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
     [DllImport("user32.dll")]   public static extern int  GetWindowLong(IntPtr hWnd, int nIndex);
     [DllImport("user32.dll")]   public static extern int  SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
     [DllImport("user32.dll")]   public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
+    [DllImport("user32.dll")]   public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
+    [DllImport("user32.dll")]   public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SetDllDirectory(string path);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
@@ -113,7 +119,7 @@ static class Program
 
             NativeMethods.SetDllDirectory(Wv2Dir);
             var hLib = NativeMethods.LoadLibrary(Path.Combine(Wv2Dir, "WebView2Loader.dll"));
-            if (hLib == IntPtr.Zero) errors.AppendLine("LoadLibrary WebView2Loader.dll FAILED");
+            if (hLib == IntPtr.Zero) errors.AppendLine("LoadLibrary WebView2Loader.dll FAILED (error " + Marshal.GetLastWin32Error() + ")");
 
             AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
             {
@@ -129,7 +135,7 @@ static class Program
         catch (Exception ex) { errors.AppendLine("ExtractBundledDlls exception: " + ex.Message); }
 
         if (errors.Length > 0)
-            MessageBox.Show("WebView2 setup issue (will use IE11 fallback):\n\n" + errors,
+            MessageBox.Show("WebView2 DLL setup issue:\n\n" + errors + "\n\nWill fall back to IE11.",
                 "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
     }
 
@@ -271,6 +277,7 @@ class OverlayForm : Form
     private System.Windows.Forms.Timer _checkinTimer;
     private TextBox    _urlBox;
     private byte       _opacity = 240;
+    private NotifyIcon _tray;
     internal CoreWebView2Environment _wv2Env;
 
     public OverlayForm(LicenseData lic)
@@ -284,15 +291,14 @@ class OverlayForm : Form
         TopMost         = true;
         BackColor       = Color.Black;
 
+        SetupTray();
         BuildToolbar();
 
-        bool hasWv2 = false;
-        string wv2Ver = null;
-        try { wv2Ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); hasWv2 = !string.IsNullOrEmpty(wv2Ver); } catch { }
+        string wv2Ver = DetectOrInstallWebView2();
 
-        if (hasWv2)
+        if (!string.IsNullOrEmpty(wv2Ver))
         {
-            Text = "WinOverlay [Chrome " + (wv2Ver ?? "") + "]";
+            Text = "WinOverlay [Chrome " + wv2Ver + "]";
             _wv2 = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_wv2);
             _toolbar.BringToFront();
@@ -301,11 +307,6 @@ class OverlayForm : Form
         else
         {
             Text = "WinOverlay [IE11]";
-            MessageBox.Show(
-                "WebView2 / Edge not found on this machine.\n\n" +
-                "Modern sites (ChatGPT, Google etc.) will not render correctly.\n\n" +
-                "Fix: install Microsoft Edge from another machine and run the installer here.",
-                "WinOverlay — IE11 mode", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             UseWebBrowser();
         }
 
@@ -317,6 +318,92 @@ class OverlayForm : Form
             { MessageBox.Show("License " + st + ". Closing.", "WinOverlay"); Close(); }
         };
         _checkinTimer.Start();
+    }
+
+    // ── WebView2 auto-install ─────────────────────────────────────────────────
+    static string DetectOrInstallWebView2()
+    {
+        // Try to detect existing runtime
+        string ver = null;
+        string detectErr = null;
+        try { ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
+        catch (Exception ex) { detectErr = ex.GetType().Name + ": " + ex.Message; }
+
+        if (!string.IsNullOrEmpty(ver)) return ver;
+
+        // Not found — offer to install
+        string msg = "WebView2 Runtime not found (required for Chrome rendering).\n";
+        if (!string.IsNullOrEmpty(detectErr)) msg += "Detail: " + detectErr + "\n";
+        msg += "\nDownload and install automatically?\n(~2 MB from Microsoft — internet required)";
+
+        if (MessageBox.Show(msg, "WinOverlay — Install WebView2",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+            return null;
+
+        try
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), "MicrosoftEdgeWebview2Setup.exe");
+            using (var wc = new WebClient())
+                wc.DownloadFile("https://go.microsoft.com/fwlink/p/?LinkId=2124703", tmp);
+
+            var p = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(tmp, "/install /silent")
+                { UseShellExecute = true });
+            p?.WaitForExit(120000);
+
+            // Retry detection
+            string ver2 = null;
+            try { ver2 = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
+            if (!string.IsNullOrEmpty(ver2)) return ver2;
+
+            MessageBox.Show("WebView2 installed. Please restart WinOverlay for Chrome rendering to activate.",
+                "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show("Install failed: " + ex.Message + "\n\nFalling back to IE11 mode.",
+                "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return null;
+        }
+    }
+
+    // ── System tray ──────────────────────────────────────────────────────────
+    void SetupTray()
+    {
+        _tray = new NotifyIcon
+        {
+            Text    = "WinOverlay  (Ctrl+Alt+W to hide/show)",
+            Icon    = SystemIcons.Application,
+            Visible = true
+        };
+
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Show / Hide   Ctrl+Alt+W", null, (s, e) => ToggleVisibility());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Close WinOverlay", null, (s, e) => Close());
+
+        _tray.ContextMenuStrip = menu;
+        _tray.DoubleClick += (s, e) => ToggleVisibility();
+    }
+
+    // Ctrl+Alt+W: fully hides WinOverlay from screen AND taskbar (invisible in remote sessions)
+    void ToggleVisibility()
+    {
+        if (Visible)
+        {
+            ShowInTaskbar = false;
+            Hide();
+            _tray.ShowBalloonTip(2000, "WinOverlay Hidden",
+                "Press Ctrl+Alt+W or double-click tray icon to restore.", ToolTipIcon.Info);
+        }
+        else
+        {
+            ShowInTaskbar = true;
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        }
     }
 
     void BuildToolbar()
@@ -420,6 +507,16 @@ class OverlayForm : Form
         int ex = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
         NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_LAYERED);
         NativeMethods.SetLayeredWindowAttributes(Handle, 0, _opacity, NativeMethods.LWA_ALPHA);
+        // Ctrl+Alt+W — hide/show WinOverlay (useful when an admin remotes in)
+        NativeMethods.RegisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE,
+            NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, (uint)Keys.W);
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == NativeMethods.WM_HOTKEY && m.WParam.ToInt32() == NativeMethods.HOTKEY_TOGGLE)
+            ToggleVisibility();
+        base.WndProc(ref m);
     }
 
     void Navigate(string url)
@@ -455,6 +552,8 @@ class OverlayForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _checkinTimer?.Stop();
+        if (IsHandleCreated) NativeMethods.UnregisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE);
+        _tray?.Dispose();
         base.OnFormClosed(e);
     }
 }
