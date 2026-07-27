@@ -552,6 +552,9 @@ class OverlayForm : Form
             _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
             await _wv2.EnsureCoreWebView2Async(_wv2Env);
 
+            // Force light theme regardless of Windows system theme
+            _wv2.CoreWebView2.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Light;
+
             var cfg = _wv2.CoreWebView2.Settings;
             cfg.IsScriptEnabled              = true;
             cfg.AreDefaultScriptDialogsEnabled   = true;
@@ -559,6 +562,10 @@ class OverlayForm : Form
             cfg.AreDefaultContextMenusEnabled    = true;
             cfg.IsStatusBarEnabled               = false;
             cfg.AreBrowserAcceleratorKeysEnabled = false;
+            cfg.IsPasswordAutosaveEnabled        = true;
+            cfg.IsGeneralAutofillEnabled         = true;
+            // Appear as regular Chrome so sites like ChatGPT don't block WebView2
+            cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
             _wv2.NavigationCompleted += (s, e) => {
