@@ -23,6 +23,10 @@ static class NativeMethods
     public const uint MOD_CONTROL            = 0x0002;
     public const uint MOD_ALT               = 0x0001;
     public const int  WM_HOTKEY             = 0x0312;
+    public const int  WM_WTSSESSION_CHANGE  = 0x02B1;
+    public const int  WTS_REMOTE_CONNECT    = 0x3;
+    public const int  WTS_REMOTE_DISCONNECT = 0x4;
+    public const uint NOTIFY_FOR_ALL_SESSIONS = 1;
     public const int  HOTKEY_TOGGLE         = 1;
 
     [DllImport("user32.dll")]   public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
@@ -31,10 +35,14 @@ static class NativeMethods
     [DllImport("user32.dll")]   public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
     [DllImport("user32.dll")]   public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")]   public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+    [DllImport("wtsapi32.dll")] public static extern bool WTSRegisterSessionNotification(IntPtr hWnd, uint dwFlags);
+    [DllImport("wtsapi32.dll")] public static extern bool WTSUnRegisterSessionNotification(IntPtr hWnd);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern bool SetDllDirectory(string path);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     public static extern IntPtr LoadLibrary(string path);
+    [DllImport("kernel32.dll")]
+    public static extern bool FreeLibrary(IntPtr hModule);
 }
 
 // ── License ───────────────────────────────────────────────────────────────────
@@ -47,7 +55,8 @@ class LicenseData
 // ── Program ───────────────────────────────────────────────────────────────────
 static class Program
 {
-    internal static string Wv2Dir; // temp dir holding extracted WebView2 DLLs
+    internal static string Wv2Dir;
+    internal static bool   Wv2DllLoaded = false;
 
     [STAThread]
     static void Main()
@@ -55,7 +64,6 @@ static class Program
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
-        // IE11 fallback emulation key (used only if WebView2 init fails)
         try {
             using var key = Registry.CurrentUser.OpenSubKey(
                 @"SOFTWARE\Microsoft\Internet Explorer\Main\FeatureControl\FEATURE_BROWSER_EMULATION", true)
@@ -64,7 +72,6 @@ static class Program
             key?.SetValue(Path.GetFileName(Application.ExecutablePath), 11001, RegistryValueKind.DWord);
         } catch { }
 
-        // Extract bundled WebView2 DLLs BEFORE any WebView2 type is JIT-compiled
         ExtractBundledDlls();
 
         LicenseData lic = ReadEmbeddedLicense() ?? ReadLicFile();
@@ -78,8 +85,6 @@ static class Program
         if (status == "expired")  { Msg("License has expired."); return; }
         if (status == "invalid")  { Msg("License rejected by server."); return; }
 
-        // RunForm is in a separate non-inlined method so WebView2 types are only
-        // JIT-compiled AFTER ExtractBundledDlls() has registered the AssemblyResolve hook
         RunForm(lic);
     }
 
@@ -119,7 +124,15 @@ static class Program
 
             NativeMethods.SetDllDirectory(Wv2Dir);
             var hLib = NativeMethods.LoadLibrary(Path.Combine(Wv2Dir, "WebView2Loader.dll"));
-            if (hLib == IntPtr.Zero) errors.AppendLine("LoadLibrary WebView2Loader.dll FAILED (error " + Marshal.GetLastWin32Error() + ")");
+            if (hLib == IntPtr.Zero)
+            {
+                int win32err = Marshal.GetLastWin32Error();
+                errors.AppendLine("LoadLibrary WebView2Loader.dll failed (error " + win32err + ")");
+            }
+            else
+            {
+                Wv2DllLoaded = true;
+            }
 
             AppDomain.CurrentDomain.AssemblyResolve += (s, e) =>
             {
@@ -278,6 +291,7 @@ class OverlayForm : Form
     private TextBox    _urlBox;
     private byte       _opacity = 240;
     private NotifyIcon _tray;
+    private bool       _autoHidden = false; // true when hidden by remote-session detection
     internal CoreWebView2Environment _wv2Env;
 
     public OverlayForm(LicenseData lic)
@@ -320,25 +334,62 @@ class OverlayForm : Form
         _checkinTimer.Start();
     }
 
-    // ── WebView2 auto-install ─────────────────────────────────────────────────
+    // ── WebView2 detection and auto-install ───────────────────────────────────
     static string DetectOrInstallWebView2()
     {
-        // Try to detect existing runtime
-        string ver = null;
-        string detectErr = null;
-        try { ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); }
-        catch (Exception ex) { detectErr = ex.GetType().Name + ": " + ex.Message; }
+        // Quick check for VC++ 2015-2022 runtime (WebView2Loader.dll dependency)
+        // LoadLibrary("MSVCP140.dll") returns non-zero if VC++ is present
+        bool hasVcrt = false;
+        {
+            var h = NativeMethods.LoadLibrary("MSVCP140.dll");
+            if (h != IntPtr.Zero) { hasVcrt = true; NativeMethods.FreeLibrary(h); }
+        }
 
+        // If DLL load failed AND VC++ is missing, that is the root cause
+        if (!Program.Wv2DllLoaded && !hasVcrt)
+        {
+            var dr = MessageBox.Show(
+                "WebView2 setup failed: VC++ 2015-2022 Runtime is missing on this machine.\n\n" +
+                "Download and install it automatically? (~25 MB from Microsoft)",
+                "WinOverlay — Install VC++ Runtime", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+            if (dr == DialogResult.Yes)
+            {
+                try
+                {
+                    string tmp = Path.Combine(Path.GetTempPath(), "vc_redist.x64.exe");
+                    using (var wc = new WebClient())
+                        wc.DownloadFile("https://aka.ms/vs/17/release/vc_redist.x64.exe", tmp);
+                    var p = System.Diagnostics.Process.Start(
+                        new System.Diagnostics.ProcessStartInfo(tmp, "/install /quiet /norestart")
+                        { UseShellExecute = true });
+                    p?.WaitForExit(120000);
+                    MessageBox.Show("VC++ Runtime installed. Please restart WinOverlay.",
+                        "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show("Install failed: " + ex.Message, "WinOverlay",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            }
+            return null; // fall back to IE11 for now; restart will use WebView2
+        }
+
+        // Standard detection
+        string ver = null;
+        try { ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
         if (!string.IsNullOrEmpty(ver)) return ver;
 
-        // Not found — offer to install
-        string msg = "WebView2 Runtime not found (required for Chrome rendering).\n";
-        if (!string.IsNullOrEmpty(detectErr)) msg += "Detail: " + detectErr + "\n";
-        msg += "\nDownload and install automatically?\n(~2 MB from Microsoft — internet required)";
+        // Try explicit Edge installation paths (handles some registry-less installs)
+        ver = TryDetectFromEdgePaths();
+        if (!string.IsNullOrEmpty(ver)) return ver;
 
-        if (MessageBox.Show(msg, "WinOverlay — Install WebView2",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
-            return null;
+        // Runtime not found — offer to install WebView2 bootstrapper
+        var ans = MessageBox.Show(
+            "WebView2 Runtime not found (required for Chrome rendering).\n\n" +
+            "Download and install automatically? (~2 MB from Microsoft)",
+            "WinOverlay — Install WebView2", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+        if (ans != DialogResult.Yes) return null;
 
         try
         {
@@ -351,21 +402,51 @@ class OverlayForm : Form
                 { UseShellExecute = true });
             p?.WaitForExit(120000);
 
-            // Retry detection
+            // Retry detection after install
             string ver2 = null;
             try { ver2 = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
             if (!string.IsNullOrEmpty(ver2)) return ver2;
+            ver2 = TryDetectFromEdgePaths();
+            if (!string.IsNullOrEmpty(ver2)) return ver2;
 
-            MessageBox.Show("WebView2 installed. Please restart WinOverlay for Chrome rendering to activate.",
+            // Install may have succeeded (e.g. 0x80040c01 = already installed)
+            // Offer restart to pick up the runtime in a fresh process
+            MessageBox.Show(
+                "WebView2 is installed but requires a restart to activate.\n\n" +
+                "Please close and reopen WinOverlay.",
                 "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return null;
         }
         catch (Exception ex)
         {
-            MessageBox.Show("Install failed: " + ex.Message + "\n\nFalling back to IE11 mode.",
+            MessageBox.Show("Install failed: " + ex.Message + "\n\nFalling back to IE11.",
                 "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return null;
         }
+    }
+
+    static string TryDetectFromEdgePaths()
+    {
+        var basePaths = new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "EdgeWebView", "Application"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "EdgeWebView", "Application"),
+        };
+        foreach (var basePath in basePaths)
+        {
+            if (!Directory.Exists(basePath)) continue;
+            foreach (var dir in Directory.GetDirectories(basePath))
+            {
+                try
+                {
+                    string v = CoreWebView2Environment.GetAvailableBrowserVersionString(dir);
+                    if (!string.IsNullOrEmpty(v)) return v;
+                }
+                catch { }
+            }
+        }
+        return null;
     }
 
     // ── System tray ──────────────────────────────────────────────────────────
@@ -387,11 +468,13 @@ class OverlayForm : Form
         _tray.DoubleClick += (s, e) => ToggleVisibility();
     }
 
-    // Ctrl+Alt+W: fully hides WinOverlay from screen AND taskbar (invisible in remote sessions)
+    // Manual toggle — hides/shows from everywhere (local + remote)
+    // Also used as the manual override when auto-hide is active
     void ToggleVisibility()
     {
         if (Visible)
         {
+            _autoHidden = false; // manual hide overrides auto state
             ShowInTaskbar = false;
             Hide();
             _tray.ShowBalloonTip(2000, "WinOverlay Hidden",
@@ -404,6 +487,25 @@ class OverlayForm : Form
             WindowState = FormWindowState.Normal;
             Activate();
         }
+    }
+
+    // Auto-hide triggered by remote session connect (WTS event)
+    void AutoHide()
+    {
+        if (!Visible) return;
+        _autoHidden = true;
+        ShowInTaskbar = false;
+        Hide();
+    }
+
+    // Auto-restore when remote session disconnects
+    void AutoRestore()
+    {
+        if (!_autoHidden) return;
+        _autoHidden = false;
+        ShowInTaskbar = true;
+        Show();
+        WindowState = FormWindowState.Normal;
     }
 
     void BuildToolbar()
@@ -444,7 +546,6 @@ class OverlayForm : Form
     {
         try
         {
-            // Persistent profile so cookies/logins survive across runs
             string profileDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "WinOverlay_profile");
@@ -507,15 +608,26 @@ class OverlayForm : Form
         int ex = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
         NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_LAYERED);
         NativeMethods.SetLayeredWindowAttributes(Handle, 0, _opacity, NativeMethods.LWA_ALPHA);
-        // Ctrl+Alt+W — hide/show WinOverlay (useful when an admin remotes in)
         NativeMethods.RegisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE,
             NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, (uint)Keys.W);
+        // Register for Terminal Services (RDP) session change events
+        try { NativeMethods.WTSRegisterSessionNotification(Handle, NativeMethods.NOTIFY_FOR_ALL_SESSIONS); } catch { }
     }
 
     protected override void WndProc(ref Message m)
     {
         if (m.Msg == NativeMethods.WM_HOTKEY && m.WParam.ToInt32() == NativeMethods.HOTKEY_TOGGLE)
+        {
             ToggleVisibility();
+        }
+        else if (m.Msg == NativeMethods.WM_WTSSESSION_CHANGE)
+        {
+            int ev = m.WParam.ToInt32();
+            if (ev == NativeMethods.WTS_REMOTE_CONNECT)
+                BeginInvoke((Action)AutoHide);
+            else if (ev == NativeMethods.WTS_REMOTE_DISCONNECT)
+                BeginInvoke((Action)AutoRestore);
+        }
         base.WndProc(ref m);
     }
 
@@ -552,7 +664,11 @@ class OverlayForm : Form
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _checkinTimer?.Stop();
-        if (IsHandleCreated) NativeMethods.UnregisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE);
+        if (IsHandleCreated)
+        {
+            NativeMethods.UnregisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE);
+            try { NativeMethods.WTSUnRegisterSessionNotification(Handle); } catch { }
+        }
         _tray?.Dispose();
         base.OnFormClosed(e);
     }
@@ -580,7 +696,6 @@ class WinOverlayPopup : Form
         Wv2.CoreWebView2.Settings.IsScriptEnabled            = true;
         Wv2.CoreWebView2.Settings.AreDefaultScriptDialogsEnabled = true;
         Wv2.CoreWebView2.WindowCloseRequested += (s, e) => { if (!IsDisposed) BeginInvoke((Action)Close); };
-        // Nested popups just navigate in this same window
         Wv2.CoreWebView2.NewWindowRequested += (s, e) => { e.Handled = true; Wv2.CoreWebView2.Navigate(e.Uri); };
     }
 
