@@ -15,7 +15,7 @@ using Microsoft.Win32;
 // ── Win32 ─────────────────────────────────────────────────────────────────────
 static class NativeMethods
 {
-    public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+    public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000001; // WDA_MONITOR: fully invisible outside physical monitor (no black box in RDP/remote)
     public const int  GWL_EXSTYLE            = -20;
     public const int  WS_EX_LAYERED          = 0x80000;
     public const uint LWA_ALPHA              = 0x00000002;
