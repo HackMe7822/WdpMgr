@@ -305,6 +305,8 @@ class OverlayForm : Form
         TopMost         = true;
         BackColor       = Color.Black;
 
+        // Set form icon from embedded app icon
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application; } catch { }
         SetupTray();
         BuildToolbar();
 
@@ -452,10 +454,12 @@ class OverlayForm : Form
     // ── System tray ──────────────────────────────────────────────────────────
     void SetupTray()
     {
+        Icon appIcon = null;
+        try { appIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
         _tray = new NotifyIcon
         {
             Text    = "WinOverlay  (Ctrl+Alt+W to hide/show)",
-            Icon    = SystemIcons.Application,
+            Icon    = appIcon ?? SystemIcons.Application,
             Visible = true
         };
 
@@ -566,6 +570,10 @@ class OverlayForm : Form
             cfg.IsGeneralAutofillEnabled         = true;
             // Appear as regular Chrome so sites like ChatGPT don't block WebView2
             cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+            // Remove WebView2 JS identity so sites like ChatGPT don't detect/block it
+            await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+                "try { delete window.chrome.webview; } catch(e) {}");
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
             _wv2.NavigationCompleted += (s, e) => {

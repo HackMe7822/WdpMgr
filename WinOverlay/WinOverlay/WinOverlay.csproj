@@ -8,6 +8,7 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>WinOverlay</AssemblyName>
     <RootNamespace>WinOverlay</RootNamespace>
+    <ApplicationIcon>app.ico</ApplicationIcon>
     <LangVersion>latest</LangVersion>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
