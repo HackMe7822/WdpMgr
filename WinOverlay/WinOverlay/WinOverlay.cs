@@ -550,7 +550,9 @@ class OverlayForm : Form
             string profileDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "WinOverlay_profile3");
-            _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
+            var opts = new CoreWebView2EnvironmentOptions(
+                "--disable-gpu --disable-gpu-compositing --use-gl=swiftshader");
+            _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, opts);
             await _wv2.EnsureCoreWebView2Async(_wv2Env);
 
             // Force light theme regardless of Windows system theme
