@@ -70,21 +70,32 @@ static class Program
         if (!hasVcrt)
         {
             Log("PREREQ: VC++ runtime missing — installing silently...");
-            bool ok = InstallPrereq("https://aka.ms/vs/17/release/vc_redist.x64.exe",
-                                    "vc_redist.x64.exe", "/install /quiet /norestart");
-            Log("PREREQ: VC++ installer " + (ok ? "completed" : "failed"));
-            if (ok) installed = true;
+            int code = InstallPrereq("https://aka.ms/vs/17/release/vc_redist.x64.exe",
+                                     "vc_redist.x64.exe", "/install /quiet /norestart");
+            Log("PREREQ: VC++ installer exit=" + code);
+            installed = true;
         }
 
         // 2. WebView2 Evergreen Runtime
         if (!IsWebView2Installed())
         {
-            Log("PREREQ: WebView2 not installed — installing silently...");
-            bool ok = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-                                    "MicrosoftEdgeWebview2Setup.exe", "/install /silent");
-            Log("PREREQ: WebView2 bootstrapper " + (ok ? "completed" : "failed") +
-                ", registry=" + IsWebView2Installed());
-            if (ok) installed = true;
+            Log("PREREQ: WebView2 not installed — trying bootstrapper (~2 MB)...");
+            int code = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+                                     "MicrosoftEdgeWebview2Setup.exe", "/install /silent");
+            Log("PREREQ: bootstrapper exit=" + code + " registry=" + IsWebView2Installed());
+
+            if (!IsWebView2Installed())
+            {
+                // Bootstrapper fails on Windows Server (0x80040c01 = EdgeUpdate blocked by policy).
+                // Fall back to the Evergreen Standalone Installer which bypasses EdgeUpdate.
+                Log("PREREQ: bootstrapper failed — trying standalone installer (~150 MB)...");
+                code = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124701",
+                                     "MicrosoftEdgeWebview2RuntimeInstaller_x64.exe", "/silent /install");
+                Log("PREREQ: standalone exit=" + code + " registry=" + IsWebView2Installed());
+            }
+
+            if (IsWebView2Installed()) { installed = true; Log("PREREQ: WebView2 installed OK"); }
+            else Log("PREREQ: WebView2 install failed — will fall back to IE11");
         }
 
         return installed;
@@ -109,7 +120,8 @@ static class Program
         return false;
     }
 
-    static bool InstallPrereq(string url, string fileName, string installArgs)
+    // Returns installer exit code, or -1 on download/launch failure.
+    static int InstallPrereq(string url, string fileName, string installArgs)
     {
         try
         {
@@ -120,14 +132,13 @@ static class Program
             Log("PREREQ: running " + fileName);
             var p = System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(tmp, installArgs) { UseShellExecute = true });
-            p?.WaitForExit(180000);
-            Log("PREREQ: exit code=" + (p?.ExitCode.ToString() ?? "?"));
-            return true;
+            p?.WaitForExit(300000); // 5-minute timeout (standalone is ~150 MB)
+            return p?.ExitCode ?? 0;
         }
         catch (Exception ex)
         {
             Log("PREREQ: exception: " + ex.Message);
-            return false;
+            return -1;
         }
     }
 
