@@ -297,7 +297,7 @@ class OverlayForm : Form
         StartPosition   = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
         TopMost         = true;
-        BackColor       = Color.Black;
+        BackColor       = Color.White;
         // Set before handle creation so WinForms puts WS_EX_LAYERED in CreateParams
         // (setting it after handle creation via SetWindowLong causes WebView2 to render black)
         Opacity         = _opacity / 255.0;
@@ -568,45 +568,13 @@ class OverlayForm : Form
             // Appear as regular Chrome so sites like ChatGPT don't block WebView2
             cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-            // Spoof real Chrome: remove WebView2 identity, mock chrome.* props, force light theme
-            await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
-(function(){
-  try { delete window.chrome.webview; } catch(e) {}
-  try { Object.defineProperty(navigator,'webdriver',{get:()=>undefined}); } catch(e) {}
-  try {
-    var c = window.chrome = window.chrome || {};
-    if (!c.app) c.app = { isInstalled:false, getIsInstalled:function(){return false;},
-      InstallState:{DISABLED:'disabled',INSTALLED:'installed',NOT_INSTALLED:'not_installed'},
-      RunningState:{CANNOT_RUN:'cannot_run',READY_TO_RUN:'ready_to_run',RUNNING:'running'},
-      getDetails:function(){}, installState:function(cb){if(cb)cb('not_installed');},
-      runningState:function(){return 'cannot_run';} };
-    if (!c.csi) c.csi=function(){return{onloadT:Date.now(),pageT:performance.now(),startE:Date.now()-1000,tran:15};};
-    if (!c.loadTimes) c.loadTimes=function(){return{requestTime:Date.now()/1000,startLoadTime:Date.now()/1000,
-      commitLoadTime:Date.now()/1000,finishDocumentLoadTime:0,finishLoadTime:0,firstPaintTime:0,
-      firstPaintAfterLoadTime:0,navigationType:'Other',wasFetchedViaSpdy:true,wasNpnNegotiated:true,
-      npnNegotiatedProtocol:'h2',wasAlternateProtocolAvailable:false,connectionInfo:'h2'};};
-    if (!c.runtime) c.runtime={};
-  } catch(e) {}
-  try { localStorage.setItem('theme','light'); } catch(e) {}
-  try {
-    new MutationObserver(function(ms){
-      ms.forEach(function(m){
-        if(m.attributeName==='class') document.documentElement.classList.remove('dark');
-      });
-    }).observe(document.documentElement,{attributes:true,attributeFilter:['class']});
-  } catch(e) {}
-})();
-");
+            // Minimal spoofing: hide WebView2 identity, set light theme preference
+            await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
+                "try{delete window.chrome.webview;}catch(e){}" +
+                "try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}" +
+                "try{localStorage.setItem('theme','light');}catch(e){}");
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
-
-            // Remove dark class after every page load (backup to the MutationObserver)
-            _wv2.CoreWebView2.DOMContentLoaded += async (s, e) => {
-                try {
-                    await _wv2.CoreWebView2.ExecuteScriptAsync(
-                        "try{document.documentElement.classList.remove('dark');}catch(e){}");
-                } catch { }
-            };
 
             _wv2.NavigationCompleted += (s, e) => {
                 try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); } catch { }
