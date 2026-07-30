@@ -549,7 +549,7 @@ class OverlayForm : Form
         {
             string profileDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "WinOverlay_profile");
+                "WinOverlay_profile3");
             _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, null);
             await _wv2.EnsureCoreWebView2Async(_wv2Env);
 
@@ -579,16 +579,32 @@ class OverlayForm : Form
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
 
             _wv2.NavigationCompleted += (s, e) => {
-                try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); } catch { }
+                try {
+                    if (_wv2?.Source != null) {
+                        bool ok = e.IsSuccess;
+                        string url = _wv2.Source.ToString();
+                        string errInfo = ok ? "" : " [ERR " + (int)e.WebErrorStatus + " " + e.WebErrorStatus + "]";
+                        BeginInvoke((Action)(() => {
+                            if (IsDisposed) return;
+                            _urlBox.Text = url;
+                            if (!ok) Text = "WinOverlay" + errInfo;
+                        }));
+                    }
+                } catch { }
             };
             _wv2Ready = true;
             if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
             else { _wv2.CoreWebView2.Navigate("https://www.google.com"); }
         }
-        catch
+        catch (Exception ex)
         {
+            string msg = ex.Message;
             try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
-            if (!IsDisposed) BeginInvoke((Action)UseWebBrowser);
+            if (!IsDisposed) BeginInvoke((Action)(() => {
+                MessageBox.Show("WebView2 failed to start:\n\n" + msg + "\n\nFalling back to IE11 (most sites won't work).",
+                    "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                UseWebBrowser();
+            }));
         }
     }
 
