@@ -58,12 +58,97 @@ static class Program
         try { File.AppendAllText(LogPath, DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + "\r\n"); } catch { }
     }
 
+    // Returns true if something was installed and the process should restart to pick it up.
+    static bool EnsurePrerequisites()
+    {
+        bool installed = false;
+
+        // 1. VC++ 2015-2022 runtime (required by WebView2Loader.dll)
+        var hVc = NativeMethods.LoadLibrary("MSVCP140.dll");
+        bool hasVcrt = hVc != IntPtr.Zero;
+        if (hasVcrt) NativeMethods.FreeLibrary(hVc);
+        if (!hasVcrt)
+        {
+            Log("PREREQ: VC++ runtime missing — installing silently...");
+            bool ok = InstallPrereq("https://aka.ms/vs/17/release/vc_redist.x64.exe",
+                                    "vc_redist.x64.exe", "/install /quiet /norestart");
+            Log("PREREQ: VC++ installer " + (ok ? "completed" : "failed"));
+            if (ok) installed = true;
+        }
+
+        // 2. WebView2 Evergreen Runtime
+        if (!IsWebView2Installed())
+        {
+            Log("PREREQ: WebView2 not installed — installing silently...");
+            bool ok = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+                                    "MicrosoftEdgeWebview2Setup.exe", "/install /silent");
+            Log("PREREQ: WebView2 bootstrapper " + (ok ? "completed" : "failed") +
+                ", registry=" + IsWebView2Installed());
+            if (ok) installed = true;
+        }
+
+        return installed;
+    }
+
+    static bool IsWebView2Installed()
+    {
+        string[] subkeys = {
+            @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+            @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
+        };
+        foreach (var sub in subkeys)
+        {
+            try
+            {
+                using var k = Registry.LocalMachine.OpenSubKey(sub);
+                var pv = k?.GetValue("pv") as string;
+                if (!string.IsNullOrEmpty(pv) && pv != "0.0.0.0") return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    static bool InstallPrereq(string url, string fileName, string installArgs)
+    {
+        try
+        {
+            string tmp = Path.Combine(Path.GetTempPath(), fileName);
+            Log("PREREQ: downloading " + url);
+            using (var wc = new WebClient())
+                wc.DownloadFile(url, tmp);
+            Log("PREREQ: running " + fileName);
+            var p = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(tmp, installArgs) { UseShellExecute = true });
+            p?.WaitForExit(180000);
+            Log("PREREQ: exit code=" + (p?.ExitCode.ToString() ?? "?"));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log("PREREQ: exception: " + ex.Message);
+            return false;
+        }
+    }
+
     [STAThread]
     static void Main()
     {
         try { File.WriteAllText(LogPath, "=== WinOverlay Startup " + DateTime.Now + " ===\r\n"); } catch { }
         Log("OS: " + Environment.OSVersion + "  x64=" + Environment.Is64BitOperatingSystem);
         Log("EXE: " + Application.ExecutablePath);
+        Log("WV2 installed=" + IsWebView2Installed());
+
+        // Silently install any missing prerequisites (VC++ runtime, WebView2).
+        // If anything was installed, restart so the new runtime is fully loaded.
+        if (EnsurePrerequisites())
+        {
+            Log("PREREQ: restarting to pick up installed runtimes...");
+            try { System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(Application.ExecutablePath) { UseShellExecute = true }); }
+            catch (Exception ex) { Log("PREREQ: restart failed: " + ex.Message); }
+            return;
+        }
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
@@ -350,95 +435,28 @@ class OverlayForm : Form
         _checkinTimer.Start();
     }
 
-    // ── WebView2 detection and auto-install ───────────────────────────────────
+    // ── WebView2 detection ────────────────────────────────────────────────────
+    // Prerequisites (VC++ runtime, WebView2) are installed automatically in
+    // Program.EnsurePrerequisites() before this is ever called. This method
+    // only detects the installed runtime and returns its version string,
+    // or null to fall back to IE11.
     static string DetectOrInstallWebView2()
     {
-        // Quick check for VC++ 2015-2022 runtime (WebView2Loader.dll dependency)
-        // LoadLibrary("MSVCP140.dll") returns non-zero if VC++ is present
-        bool hasVcrt = false;
+        if (!Program.Wv2DllLoaded)
         {
-            var h = NativeMethods.LoadLibrary("MSVCP140.dll");
-            if (h != IntPtr.Zero) { hasVcrt = true; NativeMethods.FreeLibrary(h); }
+            Program.Log("DetectOrInstallWebView2: Wv2DllLoaded=false → IE11 fallback");
+            return null;
         }
 
-        // If DLL load failed AND VC++ is missing, that is the root cause
-        if (!Program.Wv2DllLoaded && !hasVcrt)
-        {
-            var dr = MessageBox.Show(
-                "WebView2 setup failed: VC++ 2015-2022 Runtime is missing on this machine.\n\n" +
-                "Download and install it automatically? (~25 MB from Microsoft)",
-                "WinOverlay — Install VC++ Runtime", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-            if (dr == DialogResult.Yes)
-            {
-                try
-                {
-                    string tmp = Path.Combine(Path.GetTempPath(), "vc_redist.x64.exe");
-                    using (var wc = new WebClient())
-                        wc.DownloadFile("https://aka.ms/vs/17/release/vc_redist.x64.exe", tmp);
-                    var p = System.Diagnostics.Process.Start(
-                        new System.Diagnostics.ProcessStartInfo(tmp, "/install /quiet /norestart")
-                        { UseShellExecute = true });
-                    p?.WaitForExit(120000);
-                    MessageBox.Show("VC++ Runtime installed. Please restart WinOverlay.",
-                        "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show("Install failed: " + ex.Message, "WinOverlay",
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                }
-            }
-            return null; // fall back to IE11 for now; restart will use WebView2
-        }
-
-        // Standard detection
         string ver = null;
         try { ver = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
         if (!string.IsNullOrEmpty(ver)) return ver;
 
-        // Try explicit Edge installation paths (handles some registry-less installs)
         ver = TryDetectFromEdgePaths();
         if (!string.IsNullOrEmpty(ver)) return ver;
 
-        // Runtime not found — offer to install WebView2 bootstrapper
-        var ans = MessageBox.Show(
-            "WebView2 Runtime not found (required for Chrome rendering).\n\n" +
-            "Download and install automatically? (~2 MB from Microsoft)",
-            "WinOverlay — Install WebView2", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
-        if (ans != DialogResult.Yes) return null;
-
-        try
-        {
-            string tmp = Path.Combine(Path.GetTempPath(), "MicrosoftEdgeWebview2Setup.exe");
-            using (var wc = new WebClient())
-                wc.DownloadFile("https://go.microsoft.com/fwlink/p/?LinkId=2124703", tmp);
-
-            var p = System.Diagnostics.Process.Start(
-                new System.Diagnostics.ProcessStartInfo(tmp, "/install /silent")
-                { UseShellExecute = true });
-            p?.WaitForExit(120000);
-
-            // Retry detection after install
-            string ver2 = null;
-            try { ver2 = CoreWebView2Environment.GetAvailableBrowserVersionString(); } catch { }
-            if (!string.IsNullOrEmpty(ver2)) return ver2;
-            ver2 = TryDetectFromEdgePaths();
-            if (!string.IsNullOrEmpty(ver2)) return ver2;
-
-            // Install may have succeeded (e.g. 0x80040c01 = already installed)
-            // Offer restart to pick up the runtime in a fresh process
-            MessageBox.Show(
-                "WebView2 is installed but requires a restart to activate.\n\n" +
-                "Please close and reopen WinOverlay.",
-                "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("Install failed: " + ex.Message + "\n\nFalling back to IE11.",
-                "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return null;
-        }
+        Program.Log("DetectOrInstallWebView2: runtime not found after prereq check → IE11 fallback");
+        return null;
     }
 
     static string TryDetectFromEdgePaths()
