@@ -562,11 +562,13 @@ class OverlayForm : Form
             cfg.IsWebMessageEnabled              = true;
             cfg.AreDefaultContextMenusEnabled    = true;
             cfg.IsStatusBarEnabled               = false;
-            cfg.AreBrowserAcceleratorKeysEnabled = false;
+            cfg.AreBrowserAcceleratorKeysEnabled = true;
             cfg.IsPasswordAutosaveEnabled        = true;
             cfg.IsGeneralAutofillEnabled         = true;
-            // Appear as regular Chrome so sites like ChatGPT don't block WebView2
-            cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+            // Use actual installed WebView2 version so UA matches Sec-CH-UA client hints
+            string ver = _wv2Env.BrowserVersionString; // e.g. "150.0.4078.105"
+            string major = ver.Contains(".") ? ver.Substring(0, ver.IndexOf('.')) : ver;
+            cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36";
 
             // Minimal spoofing: hide WebView2 identity, set light theme preference
             await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
