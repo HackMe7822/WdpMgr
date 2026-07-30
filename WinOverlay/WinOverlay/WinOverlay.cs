@@ -51,6 +51,7 @@ static class Program
 {
     internal static string Wv2Dir;
     internal static bool   Wv2DllLoaded = false;
+    internal static string Wv2BrowserExeFolder = null; // non-null → pass to CreateAsync instead of relying on registry
     internal static string LogPath = Path.Combine(Path.GetTempPath(), "WinOverlay_diag.txt");
 
     internal static void Log(string msg)
@@ -79,23 +80,25 @@ static class Program
         // 2. WebView2 Evergreen Runtime
         if (!IsWebView2Installed())
         {
-            Log("PREREQ: WebView2 not installed — trying bootstrapper (~2 MB)...");
-            int code = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124703",
-                                     "MicrosoftEdgeWebview2Setup.exe", "/install /silent");
-            Log("PREREQ: bootstrapper exit=" + code + " registry=" + IsWebView2Installed());
-
-            if (!IsWebView2Installed())
+            // 0x80040c01 = EdgeUpdate blocked by policy (common on Windows Server).
+            // Set allow-install policy in registry BEFORE running the installer.
+            try
             {
-                // Bootstrapper fails on Windows Server (0x80040c01 = EdgeUpdate blocked by policy).
-                // Fall back to the Evergreen Standalone Installer which bypasses EdgeUpdate.
-                Log("PREREQ: bootstrapper failed — trying standalone installer (~150 MB)...");
-                code = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124701",
-                                     "MicrosoftEdgeWebview2RuntimeInstaller_x64.exe", "/silent /install");
-                Log("PREREQ: standalone exit=" + code + " registry=" + IsWebView2Installed());
+                using var pol = Registry.LocalMachine.CreateSubKey(
+                    @"SOFTWARE\Policies\Microsoft\EdgeUpdate", true);
+                pol?.SetValue("InstallDefault", 1, RegistryValueKind.DWord);
+                pol?.SetValue("Install{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", 1, RegistryValueKind.DWord);
+                Log("PREREQ: EdgeUpdate policy set to allow");
             }
+            catch (Exception ex) { Log("PREREQ: EdgeUpdate policy write failed (not admin?): " + ex.Message); }
+
+            Log("PREREQ: WebView2 not installed — trying standalone installer (~150 MB)...");
+            int code = InstallPrereq("https://go.microsoft.com/fwlink/p/?LinkId=2124701",
+                                     "MicrosoftEdgeWebview2RuntimeInstaller_x64.exe", "/silent /install");
+            Log("PREREQ: standalone exit=" + code + " registry=" + IsWebView2Installed());
 
             if (IsWebView2Installed()) { installed = true; Log("PREREQ: WebView2 installed OK"); }
-            else Log("PREREQ: WebView2 install failed — will fall back to IE11");
+            else Log("PREREQ: WebView2 install failed (code=" + code + ") — will try Edge path fallback");
         }
 
         return installed;
@@ -103,19 +106,21 @@ static class Program
 
     static bool IsWebView2Installed()
     {
-        string[] subkeys = {
-            @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-            @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}",
-        };
-        foreach (var sub in subkeys)
+        const string sub32 = @"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+        const string sub64 = @"SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+        // Check HKLM (system-wide) and HKCU (per-user install)
+        foreach (var hive in new[] { Registry.LocalMachine, Registry.CurrentUser })
         {
-            try
+            foreach (var sub in new[] { sub32, sub64 })
             {
-                using var k = Registry.LocalMachine.OpenSubKey(sub);
-                var pv = k?.GetValue("pv") as string;
-                if (!string.IsNullOrEmpty(pv) && pv != "0.0.0.0") return true;
+                try
+                {
+                    using var k = hive.OpenSubKey(sub);
+                    var pv = k?.GetValue("pv") as string;
+                    if (!string.IsNullOrEmpty(pv) && pv != "0.0.0.0") return true;
+                }
+                catch { }
             }
-            catch { }
         }
         return false;
     }
@@ -476,6 +481,8 @@ class OverlayForm : Form
         {
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "EdgeWebView", "Application"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "Microsoft", "Edge", "Application"),
+            // x64 Edge path (common on Windows Server 2022)
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),     "Microsoft", "Edge", "Application"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "EdgeWebView", "Application"),
         };
         foreach (var basePath in basePaths)
@@ -486,7 +493,13 @@ class OverlayForm : Form
                 try
                 {
                     string v = CoreWebView2Environment.GetAvailableBrowserVersionString(dir);
-                    if (!string.IsNullOrEmpty(v)) return v;
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        // Store path so InitWv2Async can pass it to CreateAsync
+                        Program.Wv2BrowserExeFolder = dir;
+                        Program.Log("WV2: found runtime at " + dir);
+                        return v;
+                    }
                 }
                 catch { }
             }
@@ -596,10 +609,12 @@ class OverlayForm : Form
             string profileDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "WinOverlay_profile3");
-            Program.Log("WV2: creating environment, profile=" + profileDir);
+            Program.Log("WV2: creating environment, profile=" + profileDir +
+                        " browserExeFolder=" + (Program.Wv2BrowserExeFolder ?? "(system)"));
             var opts = new CoreWebView2EnvironmentOptions(
                 "--disable-gpu --disable-gpu-compositing --use-gl=swiftshader");
-            _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, opts);
+            // Pass Wv2BrowserExeFolder when WebView2 was found via Edge path rather than registry
+            _wv2Env = await CoreWebView2Environment.CreateAsync(Program.Wv2BrowserExeFolder, profileDir, opts);
             Program.Log("WV2: environment created, version=" + _wv2Env.BrowserVersionString);
             await _wv2.EnsureCoreWebView2Async(_wv2Env);
             Program.Log("WV2: CoreWebView2 ready");
