@@ -602,11 +602,21 @@ class OverlayForm : Form
 ");
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
+
+            // Remove dark class after every page load (backup to the MutationObserver)
+            _wv2.CoreWebView2.DOMContentLoaded += async (s, e) => {
+                try {
+                    await _wv2.CoreWebView2.ExecuteScriptAsync(
+                        "try{document.documentElement.classList.remove('dark');}catch(e){}");
+                } catch { }
+            };
+
             _wv2.NavigationCompleted += (s, e) => {
                 try { if (_wv2?.Source != null) BeginInvoke((Action)(() => { if (!IsDisposed) _urlBox.Text = _wv2.Source.ToString(); })); } catch { }
             };
             _wv2Ready = true;
             if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
+            else { _wv2.CoreWebView2.Navigate("https://www.google.com"); }
         }
         catch
         {
