@@ -17,9 +17,6 @@ static class NativeMethods
 {
     public const uint WDA_NONE              = 0x00000000;
     public const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
-    public const int  GWL_EXSTYLE            = -20;
-    public const int  WS_EX_LAYERED          = 0x80000;
-    public const uint LWA_ALPHA              = 0x00000002;
     public const uint MOD_CONTROL            = 0x0002;
     public const uint MOD_ALT               = 0x0001;
     public const int  WM_HOTKEY             = 0x0312;
@@ -30,9 +27,6 @@ static class NativeMethods
     public const int  HOTKEY_TOGGLE         = 1;
 
     [DllImport("user32.dll")]   public static extern bool SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
-    [DllImport("user32.dll")]   public static extern int  GetWindowLong(IntPtr hWnd, int nIndex);
-    [DllImport("user32.dll")]   public static extern int  SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-    [DllImport("user32.dll")]   public static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte bAlpha, uint dwFlags);
     [DllImport("user32.dll")]   public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
     [DllImport("user32.dll")]   public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
     [DllImport("wtsapi32.dll")] public static extern bool WTSRegisterSessionNotification(IntPtr hWnd, uint dwFlags);
@@ -304,6 +298,9 @@ class OverlayForm : Form
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
         TopMost         = true;
         BackColor       = Color.Black;
+        // Set before handle creation so WinForms puts WS_EX_LAYERED in CreateParams
+        // (setting it after handle creation via SetWindowLong causes WebView2 to render black)
+        Opacity         = _opacity / 255.0;
 
         // Set form icon from embedded app icon
         try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application; } catch { }
@@ -656,9 +653,6 @@ class OverlayForm : Form
     {
         base.OnHandleCreated(e);
         NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_NONE);
-        int ex = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-        NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_LAYERED);
-        NativeMethods.SetLayeredWindowAttributes(Handle, 0, _opacity, NativeMethods.LWA_ALPHA);
         NativeMethods.RegisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE,
             NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, (uint)Keys.W);
         // Register for Terminal Services (RDP) session change events
@@ -707,9 +701,7 @@ class OverlayForm : Form
     void SetOpacity(int val)
     {
         _opacity = (byte)val;
-        int ex = NativeMethods.GetWindowLong(Handle, NativeMethods.GWL_EXSTYLE);
-        NativeMethods.SetWindowLong(Handle, NativeMethods.GWL_EXSTYLE, ex | NativeMethods.WS_EX_LAYERED);
-        NativeMethods.SetLayeredWindowAttributes(Handle, 0, _opacity, NativeMethods.LWA_ALPHA);
+        Opacity = _opacity / 255.0;
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)
