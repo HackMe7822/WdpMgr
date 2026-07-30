@@ -51,10 +51,20 @@ static class Program
 {
     internal static string Wv2Dir;
     internal static bool   Wv2DllLoaded = false;
+    internal static string LogPath = Path.Combine(Path.GetTempPath(), "WinOverlay_diag.txt");
+
+    internal static void Log(string msg)
+    {
+        try { File.AppendAllText(LogPath, DateTime.Now.ToString("HH:mm:ss.fff") + "  " + msg + "\r\n"); } catch { }
+    }
 
     [STAThread]
     static void Main()
     {
+        try { File.WriteAllText(LogPath, "=== WinOverlay Startup " + DateTime.Now + " ===\r\n"); } catch { }
+        Log("OS: " + Environment.OSVersion + "  x64=" + Environment.Is64BitOperatingSystem);
+        Log("EXE: " + Application.ExecutablePath);
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
@@ -66,20 +76,27 @@ static class Program
             key?.SetValue(Path.GetFileName(Application.ExecutablePath), 11001, RegistryValueKind.DWord);
         } catch { }
 
+        Log("Calling ExtractBundledDlls...");
         ExtractBundledDlls();
+        Log("ExtractBundledDlls done. Wv2DllLoaded=" + Wv2DllLoaded + "  Wv2Dir=" + Wv2Dir);
 
         LicenseData lic = ReadEmbeddedLicense() ?? ReadLicFile();
-        if (lic == null) { Msg("No valid license found.\n\nPlace a .lic file next to WinOverlay.exe or use a licensed EXE."); return; }
+        if (lic == null) { Log("LICENSE: not found"); Msg("No valid license found.\n\nPlace a .lic file next to WinOverlay.exe or use a licensed EXE."); return; }
+        Log("LICENSE: id=" + lic.Id + " type=" + lic.Type + " expiry=" + lic.Expiry);
 
         string err = ValidateLicense(lic);
-        if (err != null) { Msg("License error: " + err); return; }
+        if (err != null) { Log("LICENSE INVALID: " + err); Msg("License error: " + err); return; }
+        Log("LICENSE: signature valid");
 
         string status = CheckIn(lic);
+        Log("CHECKIN: " + status);
         if (status == "revoked") { Msg("License has been revoked."); return; }
         if (status == "expired")  { Msg("License has expired."); return; }
         if (status == "invalid")  { Msg("License rejected by server."); return; }
 
+        Log("Calling RunForm...");
         RunForm(lic);
+        Log("RunForm returned (app exited)");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -550,10 +567,13 @@ class OverlayForm : Form
             string profileDir = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "WinOverlay_profile3");
+            Program.Log("WV2: creating environment, profile=" + profileDir);
             var opts = new CoreWebView2EnvironmentOptions(
                 "--disable-gpu --disable-gpu-compositing --use-gl=swiftshader");
             _wv2Env = await CoreWebView2Environment.CreateAsync(null, profileDir, opts);
+            Program.Log("WV2: environment created, version=" + _wv2Env.BrowserVersionString);
             await _wv2.EnsureCoreWebView2Async(_wv2Env);
+            Program.Log("WV2: CoreWebView2 ready");
 
             // Force light theme regardless of Windows system theme
             _wv2.CoreWebView2.Profile.PreferredColorScheme = CoreWebView2PreferredColorScheme.Light;
@@ -595,15 +615,18 @@ class OverlayForm : Form
                 } catch { }
             };
             _wv2Ready = true;
-            if (_pendingUrl != null) { _wv2.CoreWebView2.Navigate(_pendingUrl); _pendingUrl = null; }
-            else { _wv2.CoreWebView2.Navigate("https://www.google.com"); }
+            string navUrl = _pendingUrl ?? "https://www.google.com";
+            Program.Log("WV2: navigating to " + navUrl);
+            _wv2.CoreWebView2.Navigate(navUrl);
+            _pendingUrl = null;
         }
         catch (Exception ex)
         {
-            string msg = ex.Message;
+            string msg = ex.GetType().Name + ": " + ex.Message;
+            Program.Log("WV2 FAILED: " + msg);
             try { if (_wv2 != null) { Controls.Remove(_wv2); _wv2.Dispose(); _wv2 = null; } } catch { }
             if (!IsDisposed) BeginInvoke((Action)(() => {
-                MessageBox.Show("WebView2 failed to start:\n\n" + msg + "\n\nFalling back to IE11 (most sites won't work).",
+                MessageBox.Show("WebView2 failed to start:\n\n" + msg + "\n\nLog: " + Program.LogPath,
                     "WinOverlay", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 UseWebBrowser();
             }));
