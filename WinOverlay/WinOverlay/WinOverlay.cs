@@ -406,9 +406,12 @@ class OverlayForm : Form
     private bool       _autoHidden = false; // true when hidden by remote-session detection
     internal CoreWebView2Environment _wv2Env;
     private Bitmap     _screenshot = null;
-    private bool       _dragging  = false;
+    private bool       _dragging     = false;
     private Point      _dragStart;
     private Point      _formStart;
+    private bool       _clickThrough = false;
+    private bool       _ctAuto       = true;  // JS drives click-through automatically
+    private Button     _btnCt;
 
     public OverlayForm(LicenseData lic)
     {
@@ -582,6 +585,7 @@ class OverlayForm : Form
         var btnGo    = MakeBtn("Go",  40, Color.FromArgb(60,  60, 200));
         var btnSnap  = MakeBtn("📷",  32, Color.FromArgb(40, 100,  40));
         var btnPaste = MakeBtn("📋",  32, Color.FromArgb(30,  80, 140));
+        _btnCt       = MakeBtn("⊕",  32, Color.FromArgb(80,  80,  80));
         var btnOpDown = MakeBtn("−",  28, Color.FromArgb(80,  80,  80));
         var btnOpUp   = MakeBtn("+",  28, Color.FromArgb(80,  80,  80));
         var btnClose  = MakeBtn("✕",  28, Color.FromArgb(180, 40,  40));
@@ -589,30 +593,75 @@ class OverlayForm : Form
         btnGo.Click     += (s, e) => Navigate(_urlBox.Text.Trim());
         btnSnap.Click   += (s, e) => TakeScreenshot(btnSnap);
         btnPaste.Click  += (s, e) => PasteScreenshot();
+        _btnCt.Click    += (s, e) => ToggleClickThrough();
         btnOpDown.Click += (s, e) => SetOpacity(Math.Max(40,  _opacity - 20));
         btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
         btnClose.Click  += (s, e) => Close();
 
         var tip = new ToolTip();
-        tip.SetToolTip(btnSnap,  "Capture full screen  (overlay is hidden during capture)");
+        tip.SetToolTip(btnSnap, "Capture full screen");
         tip.SetToolTip(btnPaste, "Paste screenshot into chat");
+        tip.SetToolTip(_btnCt, "Click-through: let clicks reach windows behind the overlay");
 
-        _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose);
-        LayoutBtns(btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose);
+        _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnSnap, btnPaste, _btnCt, btnOpDown, btnOpUp, btnClose);
+        LayoutBtns(btnGo, btnSnap, btnPaste, _btnCt, btnOpDown, btnOpUp, btnClose);
 
-        _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose });
+        _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnSnap, btnPaste, _btnCt, btnOpDown, btnOpUp, btnClose });
         Controls.Add(_toolbar);
     }
 
-    void LayoutBtns(Button go, Button snap, Button paste, Button od, Button ou, Button cl)
+    void LayoutBtns(Button go, Button snap, Button paste, Button ct, Button od, Button ou, Button cl)
     {
-        _urlBox.Width  = _toolbar.Width - 216;
+        _urlBox.Width  = _toolbar.Width - 252;
         go.Left    = _urlBox.Right + 4;  go.Top    = 4;
         snap.Left  = go.Right    + 4;    snap.Top  = 4;
         paste.Left = snap.Right  + 2;    paste.Top = 4;
-        od.Left    = paste.Right + 6;    od.Top    = 4;
+        ct.Left    = paste.Right + 6;    ct.Top    = 4;
+        od.Left    = ct.Right    + 6;    od.Top    = 4;
         ou.Left    = od.Right    + 2;    ou.Top    = 4;
         cl.Left    = ou.Right    + 6;    cl.Top    = 4;
+    }
+
+    void ToggleClickThrough()
+    {
+        if (_ctAuto)
+        {
+            // Switch from auto → manual locked ON (always pass-through)
+            _ctAuto = false; _clickThrough = true;
+        }
+        else if (_clickThrough)
+        {
+            // Locked ON → locked OFF (always capture)
+            _clickThrough = false;
+        }
+        else
+        {
+            // Locked OFF → back to auto
+            _ctAuto = true;
+        }
+        UpdateCtButton();
+    }
+
+    void UpdateCtButton()
+    {
+        if (_btnCt == null || _btnCt.IsDisposed) return;
+        if (_ctAuto)
+        {
+            _btnCt.Text      = "⊕";
+            _btnCt.BackColor = _clickThrough
+                ? Color.FromArgb(0, 160, 0)       // auto: currently passing through
+                : Color.FromArgb(60, 60, 60);      // auto: currently capturing
+        }
+        else if (_clickThrough)
+        {
+            _btnCt.Text      = "⊙";
+            _btnCt.BackColor = Color.FromArgb(0, 130, 180); // locked pass-through
+        }
+        else
+        {
+            _btnCt.Text      = "⊗";
+            _btnCt.BackColor = Color.FromArgb(150, 50, 50); // locked capture
+        }
     }
 
     // ── Screenshot capture ────────────────────────────────────────────────────
@@ -701,11 +750,47 @@ class OverlayForm : Form
             string major = ver.Contains(".") ? ver.Substring(0, ver.IndexOf('.')) : ver;
             cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36";
 
-            // Minimal spoofing: hide WebView2 identity, set light theme preference
-            await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(
-                "try{delete window.chrome.webview;}catch(e){}" +
-                "try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}" +
-                "try{localStorage.setItem('theme','light');}catch(e){}");
+            // Minimal spoofing + auto click-through detection
+            await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
+try{delete window.chrome.webview;}catch(e){}
+try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}
+try{localStorage.setItem('theme','light');}catch(e){}
+(function(){
+    var last=null;
+    function isInteractive(el){
+        var n=el;
+        while(n&&n.tagName){
+            var t=n.tagName.toUpperCase(),
+                r=(n.getAttribute&&n.getAttribute('role'))||'',
+                ce=n.contentEditable;
+            if(t==='INPUT'||t==='TEXTAREA'||t==='BUTTON'||t==='SELECT'||t==='A'||
+               r==='button'||r==='textbox'||r==='combobox'||r==='searchbox'||
+               ce==='true'||ce==='plaintext-only'){return true;}
+            n=n.parentElement;
+        }
+        return false;
+    }
+    document.addEventListener('mousemove',function(e){
+        var s=isInteractive(document.elementFromPoint(e.clientX,e.clientY))?'capture':'passthrough';
+        if(s!==last){last=s;try{window.chrome.webview.postMessage(s);}catch(x){}}
+    },{passive:true});
+    document.addEventListener('mouseleave',function(){
+        if(last!=='passthrough'){last='passthrough';try{window.chrome.webview.postMessage('passthrough');}catch(x){}}
+    });
+})();");
+
+            // Receive auto click-through signals from the page
+            _wv2.CoreWebView2.WebMessageReceived += (s, e) => {
+                try {
+                    string msg = e.TryGetWebMessageAsString();
+                    BeginInvoke((Action)(() => {
+                        if (_ctAuto) {
+                            _clickThrough = (msg == "passthrough");
+                            UpdateCtButton();
+                        }
+                    }));
+                } catch { }
+            };
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
 
@@ -787,11 +872,29 @@ class OverlayForm : Form
         // Custom caption drag — prevents black ghost caused by WDA_EXCLUDEFROMCAPTURE:
         // DWM can't render the live drag preview (content is excluded), so we handle
         // the move ourselves and suppress the default DWM preview entirely.
+        const int WM_NCHITTEST      = 0x0084;
+        const int HTTRANSPARENT     = -1;
         const int WM_NCLBUTTONDOWN  = 0x00A1;
         const int WM_MOUSEMOVE      = 0x0200;
         const int WM_LBUTTONUP      = 0x0202;
         const int WM_CAPTURECHANGED = 0x0215;
         const int HTCAPTION         = 2;
+
+        // Click-through: return HTTRANSPARENT for content area so mouse events
+        // fall through to whatever window is behind the overlay.
+        // Toolbar area always stays interactive so the user can toggle back.
+        if (m.Msg == WM_NCHITTEST && _clickThrough)
+        {
+            int lp     = m.LParam.ToInt32();
+            int sx     = (short)(lp & 0xFFFF);
+            int sy     = (short)((lp >> 16) & 0xFFFF);
+            Point cpt  = PointToClient(new Point(sx, sy));
+            if (_toolbar == null || cpt.Y >= _toolbar.Bottom)
+            {
+                m.Result = (IntPtr)HTTRANSPARENT;
+                return;
+            }
+        }
 
         if (m.Msg == WM_NCLBUTTONDOWN && m.WParam.ToInt32() == HTCAPTION)
         {
