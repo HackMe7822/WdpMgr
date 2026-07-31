@@ -37,6 +37,16 @@ static class NativeMethods
     public static extern IntPtr LoadLibrary(string path);
     [DllImport("kernel32.dll")]
     public static extern bool FreeLibrary(IntPtr hModule);
+
+    public const int  GWL_EXSTYLE        = -20;
+    public const int  WS_EX_TRANSPARENT  = 0x00000020;
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int  GetWindowLong(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern int  SetWindowLong(IntPtr hWnd, int nIndex, int newStyle);
+    public delegate bool EnumChildProc(IntPtr hwnd, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern bool EnumChildWindows(IntPtr hwndParent, EnumChildProc lpEnumFunc, IntPtr lParam);
 }
 
 // ── License ───────────────────────────────────────────────────────────────────
@@ -412,6 +422,8 @@ class OverlayForm : Form
     private bool       _clickThrough = false;
     private bool       _ctAuto       = true;  // JS drives click-through automatically
     private Button     _btnCt;
+    private System.Windows.Forms.Timer _ctTimer;
+    private bool                       _ctTimerBusy = false;
 
     public OverlayForm(LicenseData lic)
     {
@@ -631,9 +643,11 @@ class OverlayForm : Form
         }
         else
         {
-            // Locked OFF → back to auto
-            _ctAuto = true;
+            // Locked OFF → back to auto; reset to non-pass-through (timer will adjust)
+            _ctAuto = true; _clickThrough = false;
         }
+        if (!_ctAuto) SetWebView2ClickThrough(_clickThrough);
+        else          SetWebView2ClickThrough(false);
         UpdateCtButton();
     }
 
@@ -657,6 +671,69 @@ class OverlayForm : Form
             _btnCt.Text      = "⊗";
             _btnCt.BackColor = Color.FromArgb(150, 50, 50); // locked capture
         }
+    }
+
+    // ── Click-through via WS_EX_TRANSPARENT on WebView2 HWNDs ────────────────
+    // WM_NCHITTEST HTTRANSPARENT on the parent form doesn't reach the WebView2
+    // area — WebView2's Chrome renderer child HWNDs handle their own hit-testing
+    // and never propagate up to the parent. The only correct solution is to set
+    // WS_EX_TRANSPARENT directly on the WebView2 control HWND and every
+    // descendant HWND (EnumChildWindows recurses into grandchildren too).
+    void SetWebView2ClickThrough(bool enable)
+    {
+        if (_wv2 == null || !_wv2.IsHandleCreated) return;
+        ModifyExStyle(_wv2.Handle, NativeMethods.WS_EX_TRANSPARENT, enable);
+        NativeMethods.EnumChildWindows(_wv2.Handle, (hwnd, _) => {
+            ModifyExStyle(hwnd, NativeMethods.WS_EX_TRANSPARENT, enable);
+            return true;
+        }, IntPtr.Zero);
+    }
+
+    static void ModifyExStyle(IntPtr hwnd, int flag, bool set)
+    {
+        int cur = NativeMethods.GetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE);
+        int next = set ? cur | flag : cur & ~flag;
+        if (cur != next) NativeMethods.SetWindowLong(hwnd, NativeMethods.GWL_EXSTYLE, next);
+    }
+
+    // Timer-based auto click-through: polls cursor position every 100ms and asks
+    // WebView2 which DOM element is under the cursor. When WS_EX_TRANSPARENT is
+    // set on the WebView2 HWNDs, mouse events no longer reach it, so we can't
+    // rely on JS mousemove events — ExecuteScriptAsync works regardless of window
+    // transparency because it communicates via IPC, not mouse event routing.
+    async void OnCtTimer(object sender, EventArgs e)
+    {
+        if (_ctTimerBusy || !_ctAuto || !_wv2Ready || _wv2 == null || IsDisposed) return;
+        _ctTimerBusy = true;
+        try
+        {
+            Point screen = Control.MousePosition;
+            Point client = _wv2.PointToClient(screen);
+            bool inBounds = client.X >= 0 && client.Y >= 0 &&
+                            client.X < _wv2.Width && client.Y < _wv2.Height;
+            if (!inBounds)
+            {
+                if (_clickThrough) { _clickThrough = false; SetWebView2ClickThrough(false); UpdateCtButton(); }
+                return;
+            }
+            string r = await _wv2.CoreWebView2.ExecuteScriptAsync(
+                $"(function(){{var n=document.elementFromPoint({client.X},{client.Y});" +
+                "while(n&&n.tagName){var t=n.tagName.toUpperCase()," +
+                "ro=(n.getAttribute&&n.getAttribute('role'))||''," +
+                "c=n.contentEditable;" +
+                "if(t==='INPUT'||t==='TEXTAREA'||t==='BUTTON'||t==='SELECT'||t==='A'||" +
+                "ro==='button'||ro==='textbox'||ro==='combobox'||ro==='searchbox'||" +
+                "c==='true'||c==='plaintext-only')return'capture';n=n.parentElement;}return'passthrough';}})()");
+            bool pass = r.Contains("passthrough");
+            if (pass != _clickThrough)
+            {
+                _clickThrough = pass;
+                SetWebView2ClickThrough(pass);
+                UpdateCtButton();
+            }
+        }
+        catch { }
+        finally { _ctTimerBusy = false; }
     }
 
     // ── Screenshot capture ────────────────────────────────────────────────────
@@ -745,51 +822,11 @@ class OverlayForm : Form
             string major = ver.Contains(".") ? ver.Substring(0, ver.IndexOf('.')) : ver;
             cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36";
 
-            // Spoofing + auto click-through detection.
-            // IMPORTANT: capture postMessage BEFORE deleting window.chrome.webview,
-            // otherwise the auto-detection calls silently fail.
+            // Spoofing: hide WebView2 fingerprints so pages behave as a normal browser.
             await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
-var __wv2post=null;
-try{__wv2post=window.chrome.webview.postMessage.bind(window.chrome.webview);}catch(e){}
 try{delete window.chrome.webview;}catch(e){}
 try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}
-try{localStorage.setItem('theme','light');}catch(e){}
-(function(){
-    var last=null;
-    function isInteractive(el){
-        var n=el;
-        while(n&&n.tagName){
-            var t=n.tagName.toUpperCase(),
-                r=(n.getAttribute&&n.getAttribute('role'))||'',
-                ce=n.contentEditable;
-            if(t==='INPUT'||t==='TEXTAREA'||t==='BUTTON'||t==='SELECT'||t==='A'||
-               r==='button'||r==='textbox'||r==='combobox'||r==='searchbox'||
-               ce==='true'||ce==='plaintext-only'){return true;}
-            n=n.parentElement;
-        }
-        return false;
-    }
-    document.addEventListener('mousemove',function(e){
-        var s=isInteractive(document.elementFromPoint(e.clientX,e.clientY))?'capture':'passthrough';
-        if(s!==last){last=s;if(__wv2post)__wv2post(s);}
-    },{passive:true});
-    document.addEventListener('mouseleave',function(){
-        if(last!=='passthrough'){last='passthrough';if(__wv2post)__wv2post('passthrough');}
-    });
-})();");
-
-            // Receive auto click-through signals from the page
-            _wv2.CoreWebView2.WebMessageReceived += (s, e) => {
-                try {
-                    string msg = e.TryGetWebMessageAsString();
-                    BeginInvoke((Action)(() => {
-                        if (_ctAuto) {
-                            _clickThrough = (msg == "passthrough");
-                            UpdateCtButton();
-                        }
-                    }));
-                } catch { }
-            };
+try{localStorage.setItem('theme','light');}catch(e){}");
 
             _wv2.CoreWebView2.NewWindowRequested += OnPopup;
 
@@ -808,6 +845,9 @@ try{localStorage.setItem('theme','light');}catch(e){}
                 } catch { }
             };
             _wv2Ready = true;
+            _ctTimer = new System.Windows.Forms.Timer { Interval = 100 };
+            _ctTimer.Tick += OnCtTimer;
+            _ctTimer.Start();
             string navUrl = _pendingUrl ?? "https://www.google.com";
             Program.Log("WV2: navigating to " + navUrl);
             _wv2.CoreWebView2.Navigate(navUrl);
@@ -871,29 +911,11 @@ try{localStorage.setItem('theme','light');}catch(e){}
         // Custom caption drag — prevents black ghost caused by WDA_EXCLUDEFROMCAPTURE:
         // DWM can't render the live drag preview (content is excluded), so we handle
         // the move ourselves and suppress the default DWM preview entirely.
-        const int WM_NCHITTEST      = 0x0084;
-        const int HTTRANSPARENT     = -1;
         const int WM_NCLBUTTONDOWN  = 0x00A1;
         const int WM_MOUSEMOVE      = 0x0200;
         const int WM_LBUTTONUP      = 0x0202;
         const int WM_CAPTURECHANGED = 0x0215;
         const int HTCAPTION         = 2;
-
-        // Click-through: return HTTRANSPARENT for content area so mouse events
-        // fall through to whatever window is behind the overlay.
-        // Toolbar area always stays interactive so the user can toggle back.
-        if (m.Msg == WM_NCHITTEST && _clickThrough)
-        {
-            int lp     = m.LParam.ToInt32();
-            int sx     = (short)(lp & 0xFFFF);
-            int sy     = (short)((lp >> 16) & 0xFFFF);
-            Point cpt  = PointToClient(new Point(sx, sy));
-            if (_toolbar == null || cpt.Y >= _toolbar.Bottom)
-            {
-                m.Result = (IntPtr)HTTRANSPARENT;
-                return;
-            }
-        }
 
         if (m.Msg == WM_NCLBUTTONDOWN && m.WParam.ToInt32() == HTCAPTION)
         {
@@ -962,6 +984,8 @@ try{localStorage.setItem('theme','light');}catch(e){}
 
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
+        _ctTimer?.Stop();
+        _ctTimer?.Dispose();
         _checkinTimer?.Stop();
         if (IsHandleCreated)
         {
