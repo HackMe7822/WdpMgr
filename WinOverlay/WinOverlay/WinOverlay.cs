@@ -415,6 +415,7 @@ class OverlayForm : Form
         MinimumSize     = new Size(400, 300);
         StartPosition   = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
+        ShowInTaskbar   = false;
         TopMost         = true;
         BackColor       = Color.White;
         // Set before handle creation so WinForms puts WS_EX_LAYERED in CreateParams
@@ -543,7 +544,6 @@ class OverlayForm : Form
         }
         else
         {
-            ShowInTaskbar = true;
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
@@ -564,7 +564,6 @@ class OverlayForm : Form
     {
         if (!_autoHidden) return;
         _autoHidden = false;
-        ShowInTaskbar = true;
         Show();
         WindowState = FormWindowState.Normal;
     }
