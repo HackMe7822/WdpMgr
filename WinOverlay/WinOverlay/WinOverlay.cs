@@ -617,13 +617,9 @@ class OverlayForm : Form
     async void TakeScreenshot(Button btn)
     {
         btn.Enabled = false;
-        double prevOpacity = Opacity;
 
-        // Hide overlay so it is absent from the capture (works even if other apps cover the screen)
-        Opacity = 0;
-        // Await lets the UI thread repaint + DWM composite one frame without our window
-        await System.Threading.Tasks.Task.Delay(150);
-
+        // WDA_EXCLUDEFROMCAPTURE means CopyFromScreen already sees through this window —
+        // no need to hide/show, no flicker. Just capture directly.
         try
         {
             Rectangle vscr = SystemInformation.VirtualScreen;
@@ -635,19 +631,15 @@ class OverlayForm : Form
             _screenshot = bmp;
             Program.Log("Screenshot: " + vscr.Width + "x" + vscr.Height);
 
-            // Pre-load clipboard so the user can also just Ctrl+V manually
             Clipboard.SetImage(_screenshot);
-            btn.BackColor = Color.FromArgb(0, 140, 0); // green = ready
-            // Reset button colour after 1.5 s
+            btn.BackColor = Color.FromArgb(0, 140, 0);
             _ = System.Threading.Tasks.Task.Delay(1500).ContinueWith(_ =>
                 BeginInvoke((Action)(() => { if (!IsDisposed) btn.BackColor = Color.FromArgb(40, 100, 40); })));
         }
         catch (Exception ex) { Program.Log("Screenshot failed: " + ex.Message); }
-        finally
-        {
-            Opacity      = prevOpacity;
-            btn.Enabled  = true;
-        }
+        finally { btn.Enabled = true; }
+
+        await System.Threading.Tasks.Task.CompletedTask; // keeps async signature for consistency
     }
 
     async void PasteScreenshot()
@@ -778,7 +770,10 @@ class OverlayForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_NONE);
+        // Exclude from all screen capture paths (RDP, Zoom/Teams share, browser getDisplayMedia,
+        // OBS, PrintScreen, etc.) while remaining fully visible on the physical display.
+        // WDA_EXCLUDEFROMCAPTURE requires Windows 10 2004+ (build 19041); falls back gracefully.
+        NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE);
         NativeMethods.RegisterHotKey(Handle, NativeMethods.HOTKEY_TOGGLE,
             NativeMethods.MOD_CONTROL | NativeMethods.MOD_ALT, (uint)Keys.W);
         // Register for Terminal Services (RDP) session change events
@@ -872,6 +867,6 @@ class WinOverlayPopup : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_NONE);
+        NativeMethods.SetWindowDisplayAffinity(Handle, NativeMethods.WDA_EXCLUDEFROMCAPTURE);
     }
 }
