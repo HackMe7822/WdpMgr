@@ -598,11 +598,6 @@ class OverlayForm : Form
         btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
         btnClose.Click  += (s, e) => Close();
 
-        var tip = new ToolTip();
-        tip.SetToolTip(btnSnap, "Capture full screen");
-        tip.SetToolTip(btnPaste, "Paste screenshot into chat");
-        tip.SetToolTip(_btnCt, "Click-through: let clicks reach windows behind the overlay");
-
         _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnSnap, btnPaste, _btnCt, btnOpDown, btnOpUp, btnClose);
         LayoutBtns(btnGo, btnSnap, btnPaste, _btnCt, btnOpDown, btnOpUp, btnClose);
 
@@ -750,8 +745,12 @@ class OverlayForm : Form
             string major = ver.Contains(".") ? ver.Substring(0, ver.IndexOf('.')) : ver;
             cfg.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + major + ".0.0.0 Safari/537.36";
 
-            // Minimal spoofing + auto click-through detection
+            // Spoofing + auto click-through detection.
+            // IMPORTANT: capture postMessage BEFORE deleting window.chrome.webview,
+            // otherwise the auto-detection calls silently fail.
             await _wv2.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
+var __wv2post=null;
+try{__wv2post=window.chrome.webview.postMessage.bind(window.chrome.webview);}catch(e){}
 try{delete window.chrome.webview;}catch(e){}
 try{Object.defineProperty(navigator,'webdriver',{get:function(){return undefined;}});}catch(e){}
 try{localStorage.setItem('theme','light');}catch(e){}
@@ -772,10 +771,10 @@ try{localStorage.setItem('theme','light');}catch(e){}
     }
     document.addEventListener('mousemove',function(e){
         var s=isInteractive(document.elementFromPoint(e.clientX,e.clientY))?'capture':'passthrough';
-        if(s!==last){last=s;try{window.chrome.webview.postMessage(s);}catch(x){}}
+        if(s!==last){last=s;if(__wv2post)__wv2post(s);}
     },{passive:true});
     document.addEventListener('mouseleave',function(){
-        if(last!=='passthrough'){last='passthrough';try{window.chrome.webview.postMessage('passthrough');}catch(x){}}
+        if(last!=='passthrough'){last='passthrough';if(__wv2post)__wv2post('passthrough');}
     });
 })();");
 
