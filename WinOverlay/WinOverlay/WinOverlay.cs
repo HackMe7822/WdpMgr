@@ -406,6 +406,9 @@ class OverlayForm : Form
     private bool       _autoHidden = false; // true when hidden by remote-session detection
     internal CoreWebView2Environment _wv2Env;
     private Bitmap     _screenshot = null;
+    private bool       _dragging  = false;
+    private Point      _dragStart;
+    private Point      _formStart;
 
     public OverlayForm(LicenseData lic)
     {
@@ -781,6 +784,37 @@ class OverlayForm : Form
 
     protected override void WndProc(ref Message m)
     {
+        // Custom caption drag — prevents black ghost caused by WDA_EXCLUDEFROMCAPTURE:
+        // DWM can't render the live drag preview (content is excluded), so we handle
+        // the move ourselves and suppress the default DWM preview entirely.
+        const int WM_NCLBUTTONDOWN  = 0x00A1;
+        const int WM_MOUSEMOVE      = 0x0200;
+        const int WM_LBUTTONUP      = 0x0202;
+        const int WM_CAPTURECHANGED = 0x0215;
+        const int HTCAPTION         = 2;
+
+        if (m.Msg == WM_NCLBUTTONDOWN && m.WParam.ToInt32() == HTCAPTION)
+        {
+            _dragging  = true;
+            _dragStart = Control.MousePosition;
+            _formStart = Location;
+            Capture    = true;
+            return; // suppress default (which triggers DWM ghost)
+        }
+        if (m.Msg == WM_MOUSEMOVE && _dragging)
+        {
+            Point cur = Control.MousePosition;
+            Location  = new Point(_formStart.X + cur.X - _dragStart.X,
+                                  _formStart.Y + cur.Y - _dragStart.Y);
+            return;
+        }
+        if ((m.Msg == WM_LBUTTONUP || m.Msg == WM_CAPTURECHANGED) && _dragging)
+        {
+            _dragging = false;
+            Capture   = false;
+            // fall through to base
+        }
+
         if (m.Msg == NativeMethods.WM_HOTKEY && m.WParam.ToInt32() == NativeMethods.HOTKEY_TOGGLE)
         {
             ToggleVisibility();
