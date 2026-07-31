@@ -405,6 +405,7 @@ class OverlayForm : Form
     private NotifyIcon _tray;
     private bool       _autoHidden = false; // true when hidden by remote-session detection
     internal CoreWebView2Environment _wv2Env;
+    private Bitmap     _screenshot = null;
 
     public OverlayForm(LicenseData lic)
     {
@@ -576,30 +577,100 @@ class OverlayForm : Form
             BackColor = Color.FromArgb(50, 50, 50), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
         _urlBox.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { Navigate(_urlBox.Text.Trim()); e.SuppressKeyPress = true; } };
 
-        var btnGo     = MakeBtn("Go", 40, Color.FromArgb(60, 60, 200));
-        var btnOpDown = MakeBtn("−",  28, Color.FromArgb(80, 80, 80));
-        var btnOpUp   = MakeBtn("+",  28, Color.FromArgb(80, 80, 80));
-        var btnClose  = MakeBtn("✕",  28, Color.FromArgb(180, 40, 40));
+        var btnGo    = MakeBtn("Go",  40, Color.FromArgb(60,  60, 200));
+        var btnSnap  = MakeBtn("📷",  32, Color.FromArgb(40, 100,  40));
+        var btnPaste = MakeBtn("📋",  32, Color.FromArgb(30,  80, 140));
+        var btnOpDown = MakeBtn("−",  28, Color.FromArgb(80,  80,  80));
+        var btnOpUp   = MakeBtn("+",  28, Color.FromArgb(80,  80,  80));
+        var btnClose  = MakeBtn("✕",  28, Color.FromArgb(180, 40,  40));
 
         btnGo.Click     += (s, e) => Navigate(_urlBox.Text.Trim());
+        btnSnap.Click   += (s, e) => TakeScreenshot(btnSnap);
+        btnPaste.Click  += (s, e) => PasteScreenshot();
         btnOpDown.Click += (s, e) => SetOpacity(Math.Max(40,  _opacity - 20));
         btnOpUp.Click   += (s, e) => SetOpacity(Math.Min(255, _opacity + 20));
         btnClose.Click  += (s, e) => Close();
 
-        _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnOpDown, btnOpUp, btnClose);
-        LayoutBtns(btnGo, btnOpDown, btnOpUp, btnClose);
+        var tip = new ToolTip();
+        tip.SetToolTip(btnSnap,  "Capture full screen  (overlay is hidden during capture)");
+        tip.SetToolTip(btnPaste, "Paste screenshot into chat");
 
-        _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnOpDown, btnOpUp, btnClose });
+        _toolbar.Resize += (s, e) => LayoutBtns(btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose);
+        LayoutBtns(btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose);
+
+        _toolbar.Controls.AddRange(new Control[] { _urlBox, btnGo, btnSnap, btnPaste, btnOpDown, btnOpUp, btnClose });
         Controls.Add(_toolbar);
     }
 
-    void LayoutBtns(Button go, Button od, Button ou, Button cl)
+    void LayoutBtns(Button go, Button snap, Button paste, Button od, Button ou, Button cl)
     {
-        _urlBox.Width = _toolbar.Width - 140;
-        go.Left = _urlBox.Right + 4;  go.Top = 4;
-        od.Left = go.Right + 4;       od.Top = 4;
-        ou.Left = od.Right + 2;       ou.Top = 4;
-        cl.Left = ou.Right + 6;       cl.Top = 4;
+        _urlBox.Width  = _toolbar.Width - 216;
+        go.Left    = _urlBox.Right + 4;  go.Top    = 4;
+        snap.Left  = go.Right    + 4;    snap.Top  = 4;
+        paste.Left = snap.Right  + 2;    paste.Top = 4;
+        od.Left    = paste.Right + 6;    od.Top    = 4;
+        ou.Left    = od.Right    + 2;    ou.Top    = 4;
+        cl.Left    = ou.Right    + 6;    cl.Top    = 4;
+    }
+
+    // ── Screenshot capture ────────────────────────────────────────────────────
+    async void TakeScreenshot(Button btn)
+    {
+        btn.Enabled = false;
+        double prevOpacity = Opacity;
+
+        // Hide overlay so it is absent from the capture (works even if other apps cover the screen)
+        Opacity = 0;
+        // Await lets the UI thread repaint + DWM composite one frame without our window
+        await System.Threading.Tasks.Task.Delay(150);
+
+        try
+        {
+            Rectangle vscr = SystemInformation.VirtualScreen;
+            var bmp = new Bitmap(vscr.Width, vscr.Height, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            using (var g = Graphics.FromImage(bmp))
+                g.CopyFromScreen(vscr.Location, Point.Empty, vscr.Size,
+                                 System.Drawing.CopyPixelOperation.SourceCopy);
+            _screenshot?.Dispose();
+            _screenshot = bmp;
+            Program.Log("Screenshot: " + vscr.Width + "x" + vscr.Height);
+
+            // Pre-load clipboard so the user can also just Ctrl+V manually
+            Clipboard.SetImage(_screenshot);
+            btn.BackColor = Color.FromArgb(0, 140, 0); // green = ready
+            // Reset button colour after 1.5 s
+            _ = System.Threading.Tasks.Task.Delay(1500).ContinueWith(_ =>
+                BeginInvoke((Action)(() => { if (!IsDisposed) btn.BackColor = Color.FromArgb(40, 100, 40); })));
+        }
+        catch (Exception ex) { Program.Log("Screenshot failed: " + ex.Message); }
+        finally
+        {
+            Opacity      = prevOpacity;
+            btn.Enabled  = true;
+        }
+    }
+
+    async void PasteScreenshot()
+    {
+        if (_screenshot == null) { Program.Log("Paste: no screenshot yet"); return; }
+
+        try { Clipboard.SetImage(_screenshot); }
+        catch (Exception ex) { Program.Log("Paste clipboard: " + ex.Message); return; }
+
+        // Focus the browser control, let focus settle, then send Ctrl+V
+        if (_wv2 != null && _wv2Ready)
+        {
+            _wv2.Focus();
+            await System.Threading.Tasks.Task.Delay(80);
+            SendKeys.Send("^v");
+            Program.Log("Paste: Ctrl+V → WebView2");
+        }
+        else if (_wb != null)
+        {
+            _wb.Focus();
+            await System.Threading.Tasks.Task.Delay(80);
+            SendKeys.Send("^v");
+        }
     }
 
     async System.Threading.Tasks.Task InitWv2Async()
@@ -768,6 +839,7 @@ class OverlayForm : Form
             try { NativeMethods.WTSUnRegisterSessionNotification(Handle); } catch { }
         }
         _tray?.Dispose();
+        _screenshot?.Dispose();
         base.OnFormClosed(e);
     }
 }
