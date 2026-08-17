@@ -52,11 +52,18 @@ if ($UseCF -match "^[Yy]$") {
     Write-Host "    Account ID : right sidebar on dash.cloudflare.com homepage" -ForegroundColor DarkGray
     Write-Host "    Zone ID    : right sidebar when you open your domain in Cloudflare" -ForegroundColor DarkGray
     Write-Host ""
+    Write-Host "  NOTE: Use a regular API token (not a Tunnel token). Tunnel tokens start" -ForegroundColor DarkGray
+    Write-Host "        with cfut_ and will fail here — create one at API Tokens instead." -ForegroundColor DarkGray
+    Write-Host ""
     $CF_ApiToken  = Read-Host "  Cloudflare API token"
+    if ($CF_ApiToken -match "^cfut_") { Warn "That looks like a Tunnel token (cfut_...), not an API token. API calls will fail." }
     $CF_AccountId = Read-Host "  Cloudflare Account ID"
     $CF_ZoneId    = Read-Host "  Cloudflare Zone ID"
     $CF_Domain    = Read-Host "  Root domain (e.g. example.com)"
-    $CF_Subdomain = Read-Host "  Subdomain prefix (e.g. wdpmgr  ->  wdpmgr.example.com)"
+    $CF_Subdomain = Read-Host "  Subdomain prefix only (e.g. wdpmgr  ->  wdpmgr.example.com)"
+    # Strip root domain if user typed the full hostname
+    $CF_Subdomain = $CF_Subdomain -replace "\.$([regex]::Escape($CF_Domain))$", "" -replace "\.$([regex]::Escape($CF_Domain.Split('.')[0])).*$", ""
+    if ($CF_Subdomain -match "\.") { $CF_Subdomain = ($CF_Subdomain -split "\.")[0] }
 } elseif ($UseCF -match "^[Ee]$") {
     Write-Host ""
     Write-Host "  Where to find these values:" -ForegroundColor DarkGray
@@ -196,22 +203,31 @@ if ($UseCF -match "^[Yy]$") {
     $hdrs = @{ "Authorization"="Bearer $CF_ApiToken"; "Content-Type"="application/json" }
     $cfConfigDir = "$InstallDir\cf-config"; if (-not (Test-Path $cfConfigDir)) { New-Item $cfConfigDir -ItemType Directory -Force | Out-Null }
 
-    $tr = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId/cfd_tunnel?name=wdpmgr-tunnel" `
-        -Headers $hdrs -Method GET -EA SilentlyContinue
-    $tunnelId = $tr.result[0].id
+    # Try Cloudflare API — if it fails (wrong token type, no perms) fall back to existing tunnel
+    $apiOk = $false
+    try {
+        $tr = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId/cfd_tunnel?name=wdpmgr-tunnel" `
+            -Headers $hdrs -Method GET -EA Stop
+        $tunnelId = $tr.result[0].id
+        $apiOk = $true
+    } catch {
+        Warn "Cloudflare API auth failed (token may be a Tunnel token, not an API token)."
+        Warn "Falling back to existing local cloudflared config..."
+    }
 
-    if (-not $tunnelId) {
-        $sec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
-        $secB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sec))
-        $cr = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId/cfd_tunnel" `
-            -Headers $hdrs -Method POST -Body (@{name="wdpmgr-tunnel";tunnel_secret=$secB64}|ConvertTo-Json) -EA Stop
-        $tunnelId = $cr.result.id
-        @{AccountTag=$CF_AccountId;TunnelID=$tunnelId;TunnelName="wdpmgr-tunnel";TunnelSecret=$secB64} `
-            | ConvertTo-Json | Set-Content "$cfConfigDir\$tunnelId.json" -Encoding UTF8
-        OK "Tunnel created: $tunnelId"
-    } else { OK "Reusing tunnel: $tunnelId" }
+    if ($apiOk) {
+        if (-not $tunnelId) {
+            $sec = -join ((48..57)+(65..90)+(97..122) | Get-Random -Count 32 | ForEach-Object { [char]$_ })
+            $secB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($sec))
+            $cr = Invoke-RestMethod "https://api.cloudflare.com/client/v4/accounts/$CF_AccountId/cfd_tunnel" `
+                -Headers $hdrs -Method POST -Body (@{name="wdpmgr-tunnel";tunnel_secret=$secB64}|ConvertTo-Json) -EA Stop
+            $tunnelId = $cr.result.id
+            @{AccountTag=$CF_AccountId;TunnelID=$tunnelId;TunnelName="wdpmgr-tunnel";TunnelSecret=$secB64} `
+                | ConvertTo-Json | Set-Content "$cfConfigDir\$tunnelId.json" -Encoding UTF8
+            OK "Tunnel created: $tunnelId"
+        } else { OK "Reusing tunnel: $tunnelId" }
 
-    @"
+        @"
 tunnel: $tunnelId
 credentials-file: $($cfConfigDir.Replace('\','/'))\$tunnelId.json
 ingress:
@@ -220,28 +236,77 @@ ingress:
   - service: http_status:404
 "@ | Set-Content "$cfConfigDir\config.yml" -Encoding UTF8
 
-    # CNAME record
-    try {
-        $cname = "$tunnelId.cfargotunnel.com"
-        $ex = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_FullDomain" `
-            -Headers $hdrs -Method GET -EA Stop
-        $rid = $ex.result[0].id
-        $dns = @{type="CNAME";name=$CF_Subdomain;content=$cname;proxied=$true} | ConvertTo-Json
-        if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns -EA Stop | Out-Null; OK "CNAME created" }
-        else           { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns -EA Stop | Out-Null; OK "CNAME updated" }
-    } catch {
-        Warn "DNS update failed: $($_.Exception.Message)"
-        Warn "Add CNAME manually: $CF_FullDomain  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
-    }
+        # CNAME record
+        try {
+            $cname = "$tunnelId.cfargotunnel.com"
+            $ex = Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records?type=CNAME&name=$CF_FullDomain" `
+                -Headers $hdrs -Method GET -EA Stop
+            $rid = $ex.result[0].id
+            $dns = @{type="CNAME";name=$CF_Subdomain;content=$cname;proxied=$true} | ConvertTo-Json
+            if (-not $rid) { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records" -Headers $hdrs -Method POST -Body $dns -EA Stop | Out-Null; OK "CNAME created" }
+            else           { Invoke-RestMethod "https://api.cloudflare.com/client/v4/zones/$CF_ZoneId/dns_records/$rid" -Headers $hdrs -Method PUT  -Body $dns -EA Stop | Out-Null; OK "CNAME updated" }
+        } catch {
+            Warn "DNS update failed: $($_.Exception.Message)"
+            Warn "Add CNAME manually: $CF_FullDomain  →  $tunnelId.cfargotunnel.com  (Proxied ON)"
+        }
 
-    # cloudflared as service
-    $cfSvc = Get-Service "cloudflared" -EA SilentlyContinue
-    if ($cfSvc) { if ($cfSvc.Status -eq "Running") { Stop-Service "cloudflared" -Force }; & $cfExe service uninstall 2>$null; Start-Sleep 2 }
-    & $cfExe --config "$cfConfigDir\config.yml" service install
-    Start-Service "cloudflared" -EA SilentlyContinue; Start-Sleep 3
-    $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
-    if ($cfSt -eq "Running") { OK "Cloudflare Tunnel running → https://$CF_FullDomain" }
-    else { Warn "cloudflared status: $cfSt" }
+        # cloudflared as service (own config)
+        $cfSvc = Get-Service "cloudflared" -EA SilentlyContinue
+        if ($cfSvc) { if ($cfSvc.Status -eq "Running") { Stop-Service "cloudflared" -Force }; & $cfExe service uninstall 2>$null; Start-Sleep 2 }
+        & $cfExe --config "$cfConfigDir\config.yml" service install
+        Start-Service "cloudflared" -EA SilentlyContinue; Start-Sleep 3
+        $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
+        if ($cfSt -eq "Running") { OK "Cloudflare Tunnel running → https://$CF_FullDomain" }
+        else { Warn "cloudflared status: $cfSt" }
+
+    } else {
+        # API failed — add ingress to whichever existing cloudflared config is present
+        $existingCfConfigs = @(
+            "C:\Windows\System32\config\systemprofile\.cloudflared\config.yml",
+            "C:\cloudflared\config.yml",
+            "$env:USERPROFILE\.cloudflared\config.yml"
+        )
+        $existingCfConfig = $null
+        foreach ($p in $existingCfConfigs) { if (Test-Path $p) { $existingCfConfig = $p; break } }
+
+        if ($existingCfConfig) {
+            $cfRaw = Get-Content $existingCfConfig -Raw
+            # Extract tunnel ID from existing config
+            if ($cfRaw -match 'tunnel:\s*([a-f0-9\-]{36})') { $tunnelId = $Matches[1] }
+            $newEntry = "  - hostname: $CF_FullDomain`n    service: http://localhost:$Port"
+            $lines = ($cfRaw -replace "`r`n","`n") -split "`n"
+            $outLines = [System.Collections.Generic.List[string]]::new()
+            $skip = $false
+            foreach ($line in $lines) {
+                if ($line -match "hostname:\s*$([regex]::Escape($CF_FullDomain))") { $skip = $true; continue }
+                if ($skip -and $line -match "^\s+service:") { $skip = $false; continue }
+                if ($skip) { continue }
+                if ($line -match "^\s*-\s+service:\s+http_status") { $outLines.Add($newEntry) }
+                $outLines.Add($line)
+            }
+            $updated = ($outLines -join "`n").TrimEnd()
+            # Write to all known config locations so both cloudflared service and manual runs see it
+            foreach ($p in @("C:\cloudflared\config.yml", "C:\Windows\System32\config\systemprofile\.cloudflared\config.yml")) {
+                if (Test-Path (Split-Path $p)) { $updated | Set-Content $p -Encoding UTF8; OK "Updated config: $p" }
+            }
+            # Restart existing cloudflared service
+            $cfSvc = Get-Service "cloudflared" -EA SilentlyContinue
+            if ($cfSvc) {
+                if ($cfSvc.Status -eq "Running") { Stop-Service "cloudflared" -Force; Start-Sleep 2 }
+                Start-Service "cloudflared" -EA SilentlyContinue; Start-Sleep 3
+                $cfSt = (Get-Service "cloudflared" -EA SilentlyContinue).Status
+                if ($cfSt -eq "Running") { OK "Existing cloudflared restarted with WdpMgr ingress added" }
+                else { Warn "cloudflared status: $cfSt" }
+            }
+            if ($tunnelId) {
+                Warn "Add DNS CNAME manually in Cloudflare dashboard:"
+                Warn "  Type: CNAME  Name: $CF_Subdomain  Target: $tunnelId.cfargotunnel.com  Proxy: ON"
+            }
+        } else {
+            Warn "No existing cloudflared config found and API auth failed."
+            Warn "Re-run with a valid API token, or add $CF_FullDomain ingress manually."
+        }
+    }
 
 } elseif ($UseCF -match "^[Ee]$") {
     Write-Host ""
