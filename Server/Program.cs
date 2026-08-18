@@ -19,6 +19,7 @@ if (masterKey == "changeme") Console.WriteLine("[WARN] Set WDPMGR_ADMIN_KEY envi
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.UseUrls($"http://localhost:{port}");
 builder.Host.UseWindowsService(o => o.ServiceName = "WdpMgrServer");
+builder.Services.AddHostedService(sp => new OfflineDetectorService(dbPath));
 var app = builder.Build();
 
 // ── DB init ───────────────────────────────────────────────────────────────────
@@ -425,6 +426,26 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
     }
 });
 
+// ── Client uninstall notification ─────────────────────────────────────────────
+app.MapPost("/api/uninstall", async (HttpContext ctx) => {
+    try {
+        using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
+        var r         = doc.RootElement;
+        string licId  = S(r, "licenseId");
+        string fp     = S(r, "fingerprint");
+        if (string.IsNullOrEmpty(licId) || string.IsNullOrEmpty(fp))
+            return Results.Json(new { ok = false });
+        using var db  = DB.Open(dbPath);
+        var machine   = DB.GetMachineByLicAndSeat(db, licId, fp);
+        if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
+        if (machine != null && machine.Status == "active")
+            DB.SetMachineOffline(db, machine.Id);
+        return Results.Json(new { ok = true });
+    } catch {
+        return Results.Json(new { ok = true }); // silent — uninstall must not error
+    }
+});
+
 app.Run();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -534,6 +555,7 @@ static class DB
             expiredLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=0 AND type='temp' AND expiry<>'' AND expiry < date('now')"),
             revokedLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=1"),
             activeMachines  = Q("SELECT COUNT(*) FROM machines WHERE status='active'"),
+            offlineMachines = Q("SELECT COUNT(*) FROM machines WHERE status='offline'"),
             totalApps       = Q("SELECT COUNT(*) FROM apps"),
             totalAdminUsers = Q("SELECT COUNT(*) FROM admin_users")
         };
@@ -879,9 +901,23 @@ static class DB
     public static void UpdateMachineCheckin(SqliteConnection db, string id, string host, string ip) {
         string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
         using var c = db.CreateCommand();
-        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip WHERE id=$id";
+        // Reset offline→active on reconnect; leave revoked as-is
+        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip,status=CASE WHEN status='offline' THEN 'active' ELSE status END WHERE id=$id";
         c.Parameters.AddWithValue("$t", now); c.Parameters.AddWithValue("$h", host);
         c.Parameters.AddWithValue("$ip", ip); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
+    }
+
+    public static void SetMachineOffline(SqliteConnection db, string id) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET status='offline' WHERE id=$id";
+        c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void MarkOfflineMachines(SqliteConnection db, int thresholdMinutes = 15) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET status='offline' WHERE status='active' AND last_seen<>'' AND datetime(last_seen) < datetime('now', $offset)";
+        c.Parameters.AddWithValue("$offset", $"-{thresholdMinutes} minutes");
         c.ExecuteNonQuery();
     }
 
@@ -1001,4 +1037,24 @@ static class RsaSvc
 
     static string B64(byte[] b) => Convert.ToBase64String(b);
     static byte[] GB(XElement e, string t) => Convert.FromBase64String(e.Element(t)!.Value);
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Background: mark machines offline when they stop checking in
+// ═══════════════════════════════════════════════════════════════════════════════
+class OfflineDetectorService(string dbPath) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken ct) {
+        await Task.Delay(TimeSpan.FromMinutes(2), ct);   // let server fully start first
+        while (!ct.IsCancellationRequested) {
+            try {
+                using var db = DB.Open(dbPath);
+                DB.MarkOfflineMachines(db, thresholdMinutes: 15);
+            } catch (Exception ex) {
+                Console.WriteLine($"[WARN] OfflineDetector: {ex.Message}");
+            }
+            await Task.Delay(TimeSpan.FromMinutes(5), ct);
+        }
+    }
 }

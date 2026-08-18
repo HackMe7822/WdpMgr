@@ -99,6 +99,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); font
 .badge-active   { background: rgba(34,197,94,.14);  color: var(--green); }
 .badge-expired  { background: rgba(245,200,66,.12); color: var(--amber); }
 .badge-revoked  { background: rgba(239,68,68,.12);  color: var(--red); }
+.badge-offline  { background: rgba(100,116,139,.14); color: var(--muted-c); }
 /* license types */
 .badge-type-lifetime { background: rgba(45,107,228,.15); color: var(--accent); }
 .badge-type-temp     { background: rgba(245,200,66,.12); color: var(--amber); }

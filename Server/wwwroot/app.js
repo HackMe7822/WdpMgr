@@ -135,6 +135,7 @@ function loadDashboard() {
     document.getElementById('s-expired').textContent = d.expiredLicenses;
     document.getElementById('s-revoked').textContent = d.revokedLicenses;
     document.getElementById('s-machines').textContent= d.activeMachines;
+    document.getElementById('s-offline').textContent = d.offlineMachines ?? 0;
     document.getElementById('s-users').textContent   = d.totalAdminUsers;
   }).catch(e => toast(e.message, true));
 
@@ -274,9 +275,9 @@ function renderMachines(list) {
       <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
       <td>${badge(m.status)}</td>
       <td style="white-space:nowrap">
-        ${m.status!=='revoked'
-          ?`<button class="btn-icon danger" onclick='revokeMachine("${m.id}")' title="Revoke — blocks this machine">✕ Revoke</button>`
-          :`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Un-Revoke">↺ Un-Revoke</button>`
+        ${m.status==='revoked'
+          ?`<button class="btn-icon" onclick='unrevokeMachine("${m.id}")' title="Un-Revoke">↺ Un-Revoke</button>`
+          :`<button class="btn-icon${m.status==='offline'?'':' danger'}" onclick='revokeMachine("${m.id}")' title="Revoke — blocks this machine">✕ Revoke</button>`
         }
         <button class="btn-icon danger" onclick='deleteMachine("${m.id}","${e(m.hostname||m.id)}")' title="Delete row and free the seat">🗑</button>
       </td>
@@ -623,7 +624,7 @@ function e(s) {
 }
 
 function badge(status) {
-  const m = { active:'badge-active', expired:'badge-expired', revoked:'badge-revoked' };
+  const m = { active:'badge-active', expired:'badge-expired', revoked:'badge-revoked', offline:'badge-offline' };
   return `<span class="badge ${m[status]||''}">${status}</span>`;
 }
 
