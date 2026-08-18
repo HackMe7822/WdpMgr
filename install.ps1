@@ -84,6 +84,24 @@ Write-Host ""
 $confirm = Read-Host "  Install to $InstallDir ? [y/N]"
 if ($confirm -notmatch "^[Yy]$") { exit 0 }
 
+# ── Windows Defender exclusion ─────────────────────────────────────────────────
+# WdpMgr server binary must not be scanned/quarantined by Defender.
+Write-Host ""
+Write-Host "  ── Step 1b/6: Windows Defender exclusion ───────────────────" -ForegroundColor DarkGray
+if (-not (Test-Path $InstallDir)) { New-Item -ItemType Directory $InstallDir -Force | Out-Null }
+try {
+    Add-MpPreference -ExclusionPath $InstallDir -ErrorAction Stop
+    OK "Defender exclusion added: $InstallDir"
+} catch {
+    $exclScript = "Add-MpPreference -ExclusionPath '$InstallDir'"
+    $exclFile   = "$env:TEMP\wdpmgr_defender_excl.ps1"
+    $exclScript | Out-File $exclFile -Encoding utf8
+    Start-Process powershell -Verb RunAs -Wait `
+        -ArgumentList "-ExecutionPolicy Bypass -File `"$exclFile`""
+    Remove-Item $exclFile -Force -ErrorAction SilentlyContinue
+    OK "Defender exclusion added (elevated): $InstallDir"
+}
+
 # ── .NET 8 ─────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "  ── Step 2/6: .NET 8 SDK ───────────────────────────────────" -ForegroundColor DarkGray
