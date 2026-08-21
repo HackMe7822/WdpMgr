@@ -90,6 +90,14 @@ function nav(name, el) {
   }
 }
 
+// Navigate to Machines tab and apply a status filter immediately
+function navMachinesFiltered(status) {
+  const el = document.querySelector('[data-view=machines]');
+  nav('machines', el);
+  const search = document.getElementById('mach-search');
+  if (search) { search.value = status; filterMachines(); }
+}
+
 // ── API helper ────────────────────────────────────────────────────────────────
 function api(method, path, body) {
   const opts = { method, headers: { 'X-Admin-Key': API_KEY, 'Content-Type': 'application/json' } };
