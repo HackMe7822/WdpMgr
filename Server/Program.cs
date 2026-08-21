@@ -872,7 +872,7 @@ static class DB
 
     public static MachineRow? GetMachineByLicAndSeat(SqliteConnection db, string licId, string seatKey) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk LIMIT 1";
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'offline' THEN 1 ELSE 2 END LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;
@@ -882,7 +882,7 @@ static class DB
 
     public static MachineRow? GetMachineByFingerprintPrefix(SqliteConnection db, string licId, string fp) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$fp OR seat_key LIKE $pre) LIMIT 1";
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$fp OR seat_key LIKE $pre) ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'offline' THEN 1 ELSE 2 END LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId);
         c.Parameters.AddWithValue("$fp",  fp);
         c.Parameters.AddWithValue("$pre", fp + "|%");
