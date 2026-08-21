@@ -214,8 +214,8 @@ namespace WdpMgr
 
             RefreshStatus();
 
-            // Refresh status bar every 30 s so the countdown stays live
-            _statusTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+            // Refresh status bar every second so the countdown stays live
+            _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
             _statusTimer.Tick += (s, e) => RefreshStatus();
             _statusTimer.Start();
         }
@@ -283,7 +283,7 @@ namespace WdpMgr
             if (rem.TotalSeconds <= 0)
                 countdown = "EXPIRED";
             else if (rem.TotalMinutes < 60)
-                countdown = string.Format("EXPIRES IN {0}m !", (int)Math.Ceiling(rem.TotalMinutes));
+                countdown = string.Format("EXPIRES IN {0}m {1}s !", (int)rem.TotalMinutes, rem.Seconds);
             else if (rem.TotalHours < 24)
                 countdown = string.Format("{0}h {1}m remaining", (int)rem.TotalHours, rem.Minutes);
             else
