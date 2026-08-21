@@ -466,7 +466,9 @@ function utcToLocalInput(utcStr) {
 // Convert datetime-local input value (local time, no tz) → UTC ISO string
 function localInputToUtc(localStr) {
   if (!localStr) return '';
-  return new Date(localStr).toISOString();
+  const d = new Date(localStr);
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString();
 }
 
 function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, appId) {
@@ -492,10 +494,17 @@ function saveLicenseEdit() {
   const label     = document.getElementById('nl-label').value.trim();
   const expiryRaw = document.getElementById('nl-expiry').value;
   const expiryUtc = localInputToUtc(expiryRaw);
+  const licType   = document.getElementById('nl-type').value;
   const hours  = parseInt(document.getElementById('nl-days').value) || 0;
   const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
   const notes  = document.getElementById('nl-notes').value.trim();
   if (!label) { toast('Label required', true); return; }
+  if ((licType === 'temp' || licType === 'hr') && !expiryUtc) {
+    toast('Expiry date is required for temp/HR licenses', true); return;
+  }
+  if (expiryUtc && new Date(expiryUtc) <= new Date()) {
+    toast('Expiry must be a future date/time', true); return;
+  }
   api('PUT',`/api/admin/licenses/${editLicId}`,{label,expiry:expiryUtc,durationDays:hours,maxActivations:maxAct,notes}).then(()=>{
     closeModal('modal-lic'); toast('License updated'); loadLicenses();
   }).catch(e2 => toast(e2.message, true));
