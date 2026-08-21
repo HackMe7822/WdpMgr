@@ -53,10 +53,10 @@
     <section id="view-dashboard" class="view active">
       <div class="page-header"><h1>Dashboard</h1><button class="btn-primary" onclick="openLicModal()">+ New License</button></div>
       <div class="stats-grid">
-        <div class="stat-card"          style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Total Licenses</div><div class="stat-value" id="s-total">—</div></div>
-        <div class="stat-card accent-g" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Active</div><div class="stat-value" id="s-active">—</div></div>
-        <div class="stat-card accent-a" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Expired</div><div class="stat-value" id="s-expired">—</div></div>
-        <div class="stat-card accent-r" style="cursor:pointer" onclick="nav('licenses',document.querySelector('[data-view=licenses]'))"><div class="stat-label">Revoked</div><div class="stat-value" id="s-revoked">—</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="navLicensesFiltered('')"><div class="stat-label">Total Licenses</div><div class="stat-value" id="s-total">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-g" style="cursor:pointer" onclick="navLicensesFiltered('active')"><div class="stat-label">Active</div><div class="stat-value" id="s-active">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-a" style="cursor:pointer" onclick="navLicensesFiltered('expired')"><div class="stat-label">Expired</div><div class="stat-value" id="s-expired">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-r" style="cursor:pointer" onclick="navLicensesFiltered('revoked')"><div class="stat-label">Revoked</div><div class="stat-value" id="s-revoked">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card accent-b" style="cursor:pointer" onclick="navMachinesFiltered('active')"><div class="stat-label">Active Seats</div><div class="stat-value" id="s-machines">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card accent-a" style="cursor:pointer" onclick="navMachinesFiltered('offline')"><div class="stat-label">Offline Seats</div><div class="stat-value" id="s-offline">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card"          style="cursor:pointer" onclick="nav('users',document.querySelector('[data-view=users]'))"><div class="stat-label">Admin Users</div><div class="stat-value" id="s-users">—</div></div>

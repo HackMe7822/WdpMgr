@@ -90,12 +90,16 @@ function nav(name, el) {
   }
 }
 
-// Navigate to Machines tab and apply a status filter immediately
+// Navigate to Licenses/Machines tab with a pre-set filter.
+// Search box is set BEFORE nav() so that when the fetch resolves and
+// calls filterLicenses/filterMachines, the filter is already in place.
+function navLicensesFiltered(status) {
+  document.getElementById('lic-search').value = status;
+  nav('licenses', document.querySelector('[data-view=licenses]'));
+}
 function navMachinesFiltered(status) {
-  const el = document.querySelector('[data-view=machines]');
-  nav('machines', el);
-  const search = document.getElementById('mach-search');
-  if (search) { search.value = status; filterMachines(); }
+  document.getElementById('mach-search').value = status;
+  nav('machines', document.querySelector('[data-view=machines]'));
 }
 
 // ── API helper ────────────────────────────────────────────────────────────────
@@ -165,7 +169,7 @@ let _allLicenses = [];
 function loadLicenses() {
   api('GET','/api/admin/licenses').then(list => {
     _allLicenses = list;
-    renderLicenses(list);
+    filterLicenses(); // respect whatever is currently in the search box
   }).catch(e2 => toast(e2.message, true));
 }
 function filterLicenses() {
@@ -235,7 +239,7 @@ let _allMachines = [];
 function loadMachines() {
   api('GET','/api/admin/machines').then(list => {
     _allMachines = list;
-    renderMachines(list);
+    filterMachines(); // respect whatever is currently in the search box
   }).catch(e2 => toast(e2.message, true));
 }
 function filterMachines() {
