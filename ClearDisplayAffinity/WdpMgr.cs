@@ -309,15 +309,28 @@ namespace WdpMgr
             else
             {
                 // Prefer live values from server (written by check-in loop) over embedded
-                string stType, stExpiry, stDur;
-                bool hasState = Program.ReadState(out stType, out stExpiry, out stDur);
+                string stType, stExpiry, stDur, stActAt;
+                bool hasState = Program.ReadState(out stType, out stExpiry, out stDur, out stActAt);
                 string dispType   = hasState && !string.IsNullOrEmpty(stType)   ? stType   : lic.Type;
                 string dispExpiry = hasState && !string.IsNullOrEmpty(stExpiry) ? stExpiry : (lic.Expiry ?? "");
                 string dispDur    = hasState && !string.IsNullOrEmpty(stDur)    ? stDur    : (lic.DurationDays ?? "");
+                string dispActAt  = hasState && !string.IsNullOrEmpty(stActAt)  ? stActAt  : "";
                 if (dispType == "temp")
                     licInfo = "License: Temp — expires " + FormatExpiryInfo(dispExpiry);
                 else if (dispType == "days")
-                    licInfo = "License: Days — " + dispDur + "h from activation";
+                {
+                    DateTime actDt; int durH;
+                    if (!string.IsNullOrEmpty(dispActAt) && int.TryParse(dispDur, out durH) &&
+                        DateTime.TryParse(dispActAt, null,
+                            System.Globalization.DateTimeStyles.AssumeUniversal |
+                            System.Globalization.DateTimeStyles.AdjustToUniversal, out actDt))
+                    {
+                        string daysExpiry = actDt.AddHours(durH).ToString("yyyy-MM-ddTHH:mm:ssZ");
+                        licInfo = "License: Days — expires " + FormatExpiryInfo(daysExpiry);
+                    }
+                    else
+                        licInfo = "License: Days — " + dispDur + "h from activation";
+                }
                 else if (dispType == "hr")
                     licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(dispExpiry) ? "" : " — until " + FormatExpiryInfo(dispExpiry));
                 else
@@ -1016,16 +1029,16 @@ namespace WdpMgr
             return (val == "null" || val == "") ? null : val;
         }
 
-        internal static void WriteState(string type, string expiry, string durDays)
+        internal static void WriteState(string type, string expiry, string durDays, string activatedAt = "")
         {
             try { File.WriteAllText(StatePath,
-                "type=" + type + "\r\nexpiry=" + expiry + "\r\ndurationDays=" + durDays + "\r\n"); }
+                "type=" + type + "\r\nexpiry=" + expiry + "\r\ndurationDays=" + durDays + "\r\nactivatedAt=" + activatedAt + "\r\n"); }
             catch { }
         }
 
-        internal static bool ReadState(out string type, out string expiry, out string durDays)
+        internal static bool ReadState(out string type, out string expiry, out string durDays, out string activatedAt)
         {
-            type = expiry = durDays = "";
+            type = expiry = durDays = activatedAt = "";
             if (!File.Exists(StatePath)) return false;
             try
             {
@@ -1034,9 +1047,10 @@ namespace WdpMgr
                     int eq = line.IndexOf('='); if (eq < 0) continue;
                     string k = line.Substring(0, eq).Trim();
                     string v = line.Substring(eq + 1).Trim();
-                    if (k == "type")         type    = v;
-                    else if (k == "expiry")       expiry  = v;
-                    else if (k == "durationDays") durDays = v;
+                    if      (k == "type")         type        = v;
+                    else if (k == "expiry")        expiry      = v;
+                    else if (k == "durationDays")  durDays     = v;
+                    else if (k == "activatedAt")   activatedAt = v;
                 }
                 return !string.IsNullOrEmpty(type);
             }
@@ -1070,11 +1084,12 @@ namespace WdpMgr
                 }
                 if (status == "ok")
                 {
-                    string liveType   = ParseJsonField(resp, "licenseType") ?? "";
-                    string liveExpiry = ParseJsonField(resp, "expiry") ?? "";
-                    string liveDur    = ParseJsonField(resp, "durationDays") ?? "";
+                    string liveType      = ParseJsonField(resp, "licenseType") ?? "";
+                    string liveExpiry    = ParseJsonField(resp, "expiry") ?? "";
+                    string liveDur       = ParseJsonField(resp, "durationDays") ?? "";
+                    string liveActAt     = ParseJsonField(resp, "activatedAt") ?? "";
                     if (!string.IsNullOrEmpty(liveType))
-                        WriteState(liveType, liveExpiry, liveDur);
+                        WriteState(liveType, liveExpiry, liveDur, liveActAt);
                 }
                 return status;
             }
