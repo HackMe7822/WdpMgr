@@ -389,9 +389,18 @@ namespace WdpMgr
             if (preCheck == "expired")
             {
                 RefreshStatus();
+                string expiredAt = "";
+                DateTime expDt;
+                if (!string.IsNullOrEmpty(lic.Expiry) && DateTime.TryParse(lic.Expiry, out expDt))
+                    expiredAt = "\r\n  Expired at  :  " + expDt.ToLocalTime().ToString("yyyy-MM-dd  HH:mm") + "  (your local time)\r\n";
                 MessageBox.Show(
-                    "This license has expired on the server.\n\n" +
-                    "Ask your admin to extend the expiry, then re-download the EXE.",
+                    "This license has expired.\r\n" +
+                    "─────────────────────────────────────────\r\n\r\n" +
+                    expiredAt + "\r\n" +
+                    "Ask your administrator to extend the expiry\r\n" +
+                    "date, then re-download the EXE from the\r\n" +
+                    "admin panel.\r\n\r\n" +
+                    "─────────────────────────────────────────",
                     "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
@@ -459,9 +468,15 @@ namespace WdpMgr
                 DateTime expDtRO;
                 if (DateTime.TryParse(licRO.Expiry, out expDtRO) && expDtRO.ToUniversalTime() < DateTime.UtcNow)
                 {
+                    string localExpRO = expDtRO.ToLocalTime().ToString("yyyy-MM-dd  HH:mm");
                     MessageBox.Show(
-                        "This license expired on " + expDtRO.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + ".\n\n" +
-                        "Ask your admin to extend the license, then re-download the EXE.",
+                        "This license has already expired.\r\n" +
+                        "─────────────────────────────────────────\r\n\r\n" +
+                        "  Expired at  :  " + localExpRO + "  (your local time)\r\n\r\n" +
+                        "─────────────────────────────────────────\r\n" +
+                        "Ask your administrator to extend the expiry\r\n" +
+                        "date, then re-download the EXE from the\r\n" +
+                        "admin panel.",
                         "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
@@ -1130,15 +1145,24 @@ namespace WdpMgr
                     if (!string.IsNullOrEmpty(expiryStr) && !_expiryWarnShown &&
                         DateTime.TryParse(expiryStr, out exp))
                     {
-                        double minLeft = (exp.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
-                        if (minLeft > 0 && minLeft < 60)
+                        TimeSpan rem = exp.ToUniversalTime() - DateTime.UtcNow;
+                        if (rem.TotalSeconds > 0 && rem.TotalMinutes < 60)
                         {
                             _expiryWarnShown = true;
-                            string localExp = exp.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                            string localExp  = exp.ToLocalTime().ToString("yyyy-MM-dd  HH:mm");
+                            string timeLeft  = rem.TotalMinutes >= 1
+                                ? string.Format("{0}m {1}s", (int)rem.TotalMinutes, rem.Seconds)
+                                : string.Format("{0}s", (int)rem.TotalSeconds);
                             MessageBox.Show(
-                                string.Format(
-                                    "Your WdpMgr license expires in {0} minute(s).\n\nExpiry: {1} (local time)\n\nPlease contact your administrator to renew before it runs out.",
-                                    (int)Math.Ceiling(minLeft), localExp),
+                                "⚠  Your WdpMgr license is expiring soon!\r\n" +
+                                "─────────────────────────────────────────\r\n\r\n" +
+                                "  Time remaining :  " + timeLeft + "\r\n" +
+                                "  Expires at     :  " + localExp + "  (your local time)\r\n\r\n" +
+                                "─────────────────────────────────────────\r\n" +
+                                "Please contact your administrator to renew\r\n" +
+                                "the license before it expires.\r\n\r\n" +
+                                "Once expired, the display policy will be\r\n" +
+                                "released and this tool will uninstall itself.",
                                 "WdpMgr — License Expiring Soon",
                                 MessageBoxButtons.OK,
                                 MessageBoxIcon.Warning);
