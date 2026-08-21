@@ -189,9 +189,9 @@ function renderLicenses(list) {
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses found.</td></tr>'; stopCountdowns(); return; }
   tbody.innerHTML = list.map(l => {
     const unlimited = l.maxActivations < 0;
-    // Status computed from live time so it flips immediately at expiry
     const status = l.revoked ? 'revoked'
       : (l.expiryEpochMs && l.expiryEpochMs < Date.now()) ? 'expired'
+      : (l.daysLeft != null && l.daysLeft < 0) ? 'expired'
       : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
       : 'active';
     let expCol;
@@ -199,11 +199,21 @@ function renderLicenses(list) {
       expCol = '∞ Lifetime';
     } else if (l.revoked) {
       expCol = '<span class="muted">—</span>';
-    } else if (l.expiryEpochMs == null) {
-      expCol = l.type === 'days' ? fmtHours(l.durationDays) + ' <span class="muted">(not activated)</span>' : '—';
-    } else {
-      // Live countdown span — updated every second by _tickCountdowns()
+    } else if (l.expiryEpochMs != null) {
+      // Server is up-to-date — live second-precision countdown
       expCol = `<span data-expires-ms="${l.expiryEpochMs}" data-expiry-display="${e(l.expiryDisplay||'')}"></span>`;
+    } else if (l.daysLeft != null) {
+      // Older server binary — fall back to minute-precision display
+      if (l.daysLeft < 0) {
+        expCol = `<span style="color:var(--red)">Expired${l.expiryDisplay ? ' ('+l.expiryDisplay+')' : ''}</span>`;
+      } else if (l.daysLeft >= 2880 && l.expiryDisplay) {
+        expCol = `<span style="color:var(--green)" title="${fmtMins(l.daysLeft)} remaining">${l.expiryDisplay}</span>`;
+      } else {
+        const col = l.daysLeft <= 2880 ? 'var(--amber)' : 'var(--green)';
+        expCol = `<span style="color:${col}"${l.expiryDisplay ? ` title="Expires ${l.expiryDisplay}"` : ''}>${fmtMins(l.daysLeft)}</span>`;
+      }
+    } else {
+      expCol = l.type === 'days' ? fmtHours(l.durationDays) + ' <span class="muted">(not activated)</span>' : '<span class="muted">—</span>';
     }
     const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
     return `<tr>
@@ -251,11 +261,21 @@ function renderMachines(list) {
   if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines found.</td></tr>'; stopCountdowns(); return; }
   tbody.innerHTML = list.map(m => {
     let timeLeft;
-    if (m.licenseType === 'lifetime' || m.expiryEpochMs == null) {
+    if (m.licenseType === 'lifetime' || (m.expiryEpochMs == null && m.daysLeft == null)) {
       timeLeft = '<span style="color:var(--green)">∞</span>';
-    } else {
-      // Live countdown — updated every second by _tickCountdowns()
+    } else if (m.expiryEpochMs != null) {
+      // Server up-to-date — live second-precision countdown
       timeLeft = `<span data-expires-ms="${m.expiryEpochMs}" data-expiry-display="${e(m.expiryDisplay||'')}"></span>`;
+    } else {
+      // Older server binary — minute-precision fallback
+      if (m.daysLeft < 0) {
+        timeLeft = `<span style="color:var(--red)">Expired${m.expiryDisplay ? ' ('+m.expiryDisplay+')' : ''}</span>`;
+      } else if (m.daysLeft >= 2880 && m.expiryDisplay) {
+        timeLeft = `<span style="color:var(--green)" title="${fmtMins(m.daysLeft)} remaining">${m.expiryDisplay}</span>`;
+      } else {
+        const col = m.daysLeft <= 2880 ? 'var(--amber)' : 'var(--green)';
+        timeLeft = `<span style="color:${col}"${m.expiryDisplay ? ` title="Expires ${m.expiryDisplay}"` : ''}>${fmtMins(m.daysLeft)}</span>`;
+      }
     }
     return `<tr>
       <td>${e(m.hostname||'—')}</td>
