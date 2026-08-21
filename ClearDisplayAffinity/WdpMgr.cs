@@ -125,6 +125,7 @@ namespace WdpMgr
     {
         private Label  _lblStatus;
         private Button _btnInstall, _btnUninstall, _btnOnce, _btnClose;
+        private System.Windows.Forms.Timer _statusTimer;
 
         private static readonly Color BG     = Color.FromArgb(16,  51, 100);
         private static readonly Color BG2    = Color.FromArgb(11,  37,  76);
@@ -212,6 +213,11 @@ namespace WdpMgr
             _btnClose.Click     += (s, e) => Close();
 
             RefreshStatus();
+
+            // Refresh status bar every 30 s so the countdown stays live
+            _statusTimer = new System.Windows.Forms.Timer { Interval = 30000 };
+            _statusTimer.Tick += (s, e) => RefreshStatus();
+            _statusTimer.Start();
         }
 
         private static Button Btn(string text, int x, Control parent)
@@ -258,6 +264,34 @@ namespace WdpMgr
             }
         }
 
+        // Formats a UTC ISO-8601 expiry string into local time + countdown.
+        // Example: "2026-08-23 14:30 (local)  |  2d 3h remaining"
+        //          "2026-08-21 11:50 (local)  |  EXPIRES IN 14m !"
+        //          "2026-08-21 11:00 (local)  |  EXPIRED"
+        private static string FormatExpiryInfo(string utcIso)
+        {
+            if (string.IsNullOrEmpty(utcIso)) return "(no expiry set)";
+            DateTime exp;
+            if (!DateTime.TryParse(utcIso, out exp)) return utcIso;
+            if (exp.Kind == DateTimeKind.Unspecified)
+                exp = DateTime.SpecifyKind(exp, DateTimeKind.Utc);
+
+            string localStr = exp.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + " (local)";
+
+            TimeSpan rem = exp.ToUniversalTime() - DateTime.UtcNow;
+            string countdown;
+            if (rem.TotalSeconds <= 0)
+                countdown = "EXPIRED";
+            else if (rem.TotalMinutes < 60)
+                countdown = string.Format("EXPIRES IN {0}m !", (int)Math.Ceiling(rem.TotalMinutes));
+            else if (rem.TotalHours < 24)
+                countdown = string.Format("{0}h {1}m remaining", (int)rem.TotalHours, rem.Minutes);
+            else
+                countdown = string.Format("{0}d {1}h remaining", (int)rem.TotalDays, rem.Hours);
+
+            return localStr + "  |  " + countdown;
+        }
+
         private void RefreshStatus()
         {
             string st      = Program.GetServiceStatus();
@@ -281,11 +315,11 @@ namespace WdpMgr
                 string dispExpiry = hasState && !string.IsNullOrEmpty(stExpiry) ? stExpiry : (lic.Expiry ?? "");
                 string dispDur    = hasState && !string.IsNullOrEmpty(stDur)    ? stDur    : (lic.DurationDays ?? "");
                 if (dispType == "temp")
-                    licInfo = "License: Temp — expires " + dispExpiry.Replace("T", " ");
+                    licInfo = "License: Temp — expires " + FormatExpiryInfo(dispExpiry);
                 else if (dispType == "days")
                     licInfo = "License: Days — " + dispDur + "h from activation";
                 else if (dispType == "hr")
-                    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(dispExpiry) ? "" : " — until " + dispExpiry.Replace("T", " "));
+                    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(dispExpiry) ? "" : " — until " + FormatExpiryInfo(dispExpiry));
                 else
                     licInfo = "License: Lifetime";
             }
@@ -1072,6 +1106,8 @@ namespace WdpMgr
                     .Replace("\r", "").Replace("\n", "");
         }
 
+        private static volatile bool _expiryWarnShown = false;
+
         internal static void StartLicenseLoop(LicenseData lic)
         {
             var t = new Thread(() =>
@@ -1087,6 +1123,26 @@ namespace WdpMgr
                         Log("License invalidated (" + status + ") — self-removing");
                         SelfDestruct();
                         Environment.Exit(0);
+                    }
+
+                    // Warn once when expiry is within 60 minutes
+                    string expiryStr = lic.Expiry;
+                    if (!string.IsNullOrEmpty(expiryStr) && !_expiryWarnShown &&
+                        DateTime.TryParse(expiryStr, out exp))
+                    {
+                        double minLeft = (exp.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
+                        if (minLeft > 0 && minLeft < 60)
+                        {
+                            _expiryWarnShown = true;
+                            string localExp = exp.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                            MessageBox.Show(
+                                string.Format(
+                                    "Your WdpMgr license expires in {0} minute(s).\n\nExpiry: {1} (local time)\n\nPlease contact your administrator to renew before it runs out.",
+                                    (int)Math.Ceiling(minLeft), localExp),
+                                "WdpMgr — License Expiring Soon",
+                                MessageBoxButtons.OK,
+                                MessageBoxIcon.Warning);
+                        }
                     }
 
                     // Check every 5 minutes; down to 1 min when expiry is within 30 min

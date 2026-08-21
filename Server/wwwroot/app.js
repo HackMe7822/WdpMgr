@@ -415,30 +415,46 @@ function onLicTypeChange() {
     t === 'hr' ? 'Max Seats (unique Windows users)' : 'Max Machines';
   // Update expiry label for HR context
   const expLabel = document.querySelector('#nl-row-expiry label');
-  if (expLabel) expLabel.textContent = t === 'hr'
-    ? 'Validity — expires at (optional, server UTC)'
-    : 'Expiry Date & Time (server UTC)';
+  if (expLabel) expLabel.innerHTML = t === 'hr'
+    ? 'Validity — expires at (optional) <span class="muted small">(your local time — auto-converted to UTC)</span>'
+    : 'Expiry Date &amp; Time <span class="muted small">(your local time — auto-converted to UTC)</span>';
 }
 
 function submitLicModal() {
   if (editLicId) { saveLicenseEdit(); return; }
-  const label  = document.getElementById('nl-label').value.trim();
-  const type   = document.getElementById('nl-type').value;
-  const expiry = document.getElementById('nl-expiry').value;
+  const label      = document.getElementById('nl-label').value.trim();
+  const type       = document.getElementById('nl-type').value;
+  const expiryRaw  = document.getElementById('nl-expiry').value;
+  const expiryUtc  = localInputToUtc(expiryRaw);
   const days   = parseInt(document.getElementById('nl-days').value) || 0;
   const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
   const appId  = document.getElementById('nl-app').value;
   const notes  = document.getElementById('nl-notes').value.trim();
   if (!label) { toast('Label required', true); return; }
   if (!appId) { toast('Please select an App for this license', true); return; }
-  if ((type==='temp'||type==='hr') && type!=='lifetime' && !expiry && type==='temp') { toast('Expiry date required', true); return; }
+  if (type==='temp' && !expiryRaw) { toast('Expiry date required', true); return; }
   if (type==='days' && days < 1) { toast('Duration must be >= 1 hour', true); return; }
-  api('POST','/api/admin/licenses',{label,type,expiry,durationDays:days,maxActivations:maxAct,appId,notes}).then(()=>{
+  api('POST','/api/admin/licenses',{label,type,expiry:expiryUtc,durationDays:days,maxActivations:maxAct,appId,notes}).then(()=>{
     closeModal('modal-lic'); toast('License created'); loadLicenses(); loadDashboard();
   }).catch(e2 => toast(e2.message, true));
 }
 
 let editLicId = null;
+
+// Convert UTC ISO string → datetime-local input value (YYYY-MM-DDTHH:MM in local time)
+function utcToLocalInput(utcStr) {
+  if (!utcStr) return '';
+  const d = new Date(utcStr);
+  if (isNaN(d)) return '';
+  const pad = n => String(n).padStart(2,'0');
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());
+}
+
+// Convert datetime-local input value (local time, no tz) → UTC ISO string
+function localInputToUtc(localStr) {
+  if (!localStr) return '';
+  return new Date(localStr).toISOString();
+}
 
 function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, appId) {
   editLicId = id;
@@ -447,7 +463,7 @@ function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, app
   document.getElementById('nl-label').value   = label;
   document.getElementById('nl-type').value    = type;
   document.getElementById('nl-type').disabled = true;
-  document.getElementById('nl-expiry').value  = expiry ? expiry.replace(' ','T') : '';
+  document.getElementById('nl-expiry').value  = utcToLocalInput(expiry);
   document.getElementById('nl-days').value    = durationDays || 720;
   const unlimited = maxAct < 0;
   document.getElementById('nl-unlimited').checked  = unlimited;
@@ -460,13 +476,14 @@ function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, app
 }
 
 function saveLicenseEdit() {
-  const label  = document.getElementById('nl-label').value.trim();
-  const expiry = document.getElementById('nl-expiry').value;
+  const label     = document.getElementById('nl-label').value.trim();
+  const expiryRaw = document.getElementById('nl-expiry').value;
+  const expiryUtc = localInputToUtc(expiryRaw);
   const hours  = parseInt(document.getElementById('nl-days').value) || 0;
   const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
   const notes  = document.getElementById('nl-notes').value.trim();
   if (!label) { toast('Label required', true); return; }
-  api('PUT',`/api/admin/licenses/${editLicId}`,{label,expiry,durationDays:hours,maxActivations:maxAct,notes}).then(()=>{
+  api('PUT',`/api/admin/licenses/${editLicId}`,{label,expiry:expiryUtc,durationDays:hours,maxActivations:maxAct,notes}).then(()=>{
     closeModal('modal-lic'); toast('License updated'); loadLicenses();
   }).catch(e2 => toast(e2.message, true));
 }
