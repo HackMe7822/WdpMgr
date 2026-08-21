@@ -389,17 +389,12 @@ namespace WdpMgr
             if (preCheck == "expired")
             {
                 RefreshStatus();
-                string expiredAt = "";
-                DateTime expDt;
-                if (!string.IsNullOrEmpty(lic.Expiry) && DateTime.TryParse(lic.Expiry, out expDt))
-                    expiredAt = "\r\n  Expired at  :  " + expDt.ToLocalTime().ToString("yyyy-MM-dd  HH:mm") + "  (your local time)\r\n";
                 MessageBox.Show(
-                    "This license has expired.\r\n" +
+                    "This license has expired on the server.\r\n" +
                     "─────────────────────────────────────────\r\n\r\n" +
-                    expiredAt + "\r\n" +
                     "Ask your administrator to extend the expiry\r\n" +
-                    "date, then re-download the EXE from the\r\n" +
-                    "admin panel.\r\n\r\n" +
+                    "date in the admin panel, then click Install\r\n" +
+                    "again — no need to re-download the EXE.\r\n\r\n" +
                     "─────────────────────────────────────────",
                     "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;

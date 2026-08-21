@@ -703,7 +703,7 @@ static class DB
                                  a.name, COUNT(m.id) as seats, a.slug
                           FROM licenses l
                           LEFT JOIN apps a ON a.id=l.app_id
-                          LEFT JOIN machines m ON m.license_id=l.id AND m.status='active'
+                          LEFT JOIN machines m ON m.license_id=l.id AND m.status != 'revoked'
                           GROUP BY l.id ORDER BY l.issued DESC";
         using var r = c.ExecuteReader();
         while (r.Read()) {
@@ -893,7 +893,7 @@ static class DB
 
     public static int GetActivationCount(SqliteConnection db, string licId) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
+        c.CommandText = "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status != 'revoked'";
         c.Parameters.AddWithValue("$lic", licId);
         return (int)(long)c.ExecuteScalar()!;
     }
