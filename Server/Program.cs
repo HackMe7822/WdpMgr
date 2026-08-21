@@ -415,6 +415,9 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         } else {
             if (machine.Status == "revoked") return Results.Json(new { status="revoked" });
             DB.UpdateMachineCheckin(db, machine.Id, host, ip);
+            // activated_at may be empty if cleared by admin reset — set it now
+            if (lic.Type == "days" && string.IsNullOrEmpty(lic.ActivatedAt))
+                DB.SetActivatedAt(db, licId, DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss"));
             // Migrate old fp|winUser seatKey to plain fp
             if (machine.SeatKey != seatKey) DB.UpdateMachineSeatKey(db, machine.Id, seatKey);
         }
