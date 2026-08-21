@@ -400,9 +400,9 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
         // Migration: old rows used fp|winUser format — find and migrate them to fp-only
         if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
-        // count_reinstalls: treat an uninstalled (offline) machine as a brand-new install so it consumes another seat
+        // count_reinstalls: only treat explicitly uninstalled machines as new installs (not natural offline)
         bool countReinstalls = lic.CountReinstalls == 1;
-        if (machine != null && machine.Status == "offline" && countReinstalls)
+        if (machine != null && machine.Status == "uninstalled" && countReinstalls)
             machine = null;
         if (machine == null) {
             int cur = DB.GetActivationCount(db, licId, countReinstalls);
@@ -445,7 +445,7 @@ app.MapPost("/api/uninstall", async (HttpContext ctx) => {
         var machine   = DB.GetMachineByLicAndSeat(db, licId, fp);
         if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
         if (machine != null && machine.Status == "active")
-            DB.SetMachineOffline(db, machine.Id);
+            DB.SetMachineStatus(db, machine.Id, "uninstalled");
         return Results.Json(new { ok = true });
     } catch {
         return Results.Json(new { ok = true }); // silent — uninstall must not error
@@ -902,9 +902,9 @@ static class DB
 
     public static int GetActivationCount(SqliteConnection db, string licId, bool countAll = false) {
         using var c = db.CreateCommand();
-        // countAll=true: count active+offline (not revoked) — used when count_reinstalls is on
+        // countAll=true: count active+uninstalled (not offline/revoked) — used when count_reinstalls is on
         c.CommandText = countAll
-            ? "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status!='revoked'"
+            ? "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND (status='active' OR status='uninstalled')"
             : "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
         c.Parameters.AddWithValue("$lic", licId);
         return (int)(long)c.ExecuteScalar()!;
@@ -926,8 +926,8 @@ static class DB
     public static void UpdateMachineCheckin(SqliteConnection db, string id, string host, string ip) {
         string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
         using var c = db.CreateCommand();
-        // Reset offline→active on reconnect; leave revoked as-is
-        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip,status=CASE WHEN status='offline' THEN 'active' ELSE status END WHERE id=$id";
+        // Reset offline/uninstalled→active on reconnect; leave revoked as-is
+        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip,status=CASE WHEN status IN ('offline','uninstalled') THEN 'active' ELSE status END WHERE id=$id";
         c.Parameters.AddWithValue("$t", now); c.Parameters.AddWithValue("$h", host);
         c.Parameters.AddWithValue("$ip", ip); c.Parameters.AddWithValue("$id", id);
         c.ExecuteNonQuery();
@@ -937,6 +937,13 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE machines SET status='offline' WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
+    }
+
+    public static void SetMachineStatus(SqliteConnection db, string id, string status) {
+        using var c = db.CreateCommand();
+        c.CommandText = "UPDATE machines SET status=$s WHERE id=$id";
+        c.Parameters.AddWithValue("$s", status); c.Parameters.AddWithValue("$id", id);
+        c.ExecuteNonQuery();
     }
 
     public static void MarkOfflineMachines(SqliteConnection db, int thresholdMinutes = 15) {
