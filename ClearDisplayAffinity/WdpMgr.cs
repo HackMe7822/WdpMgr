@@ -1140,9 +1140,10 @@ namespace WdpMgr
                         Environment.Exit(0);
                     }
 
-                    // Warn once when expiry is within 60 minutes
+                    // Warn once when expiry is within 60 minutes (GUI only — services have no interactive desktop)
                     string expiryStr = lic.Expiry;
-                    if (!string.IsNullOrEmpty(expiryStr) && !_expiryWarnShown &&
+                    if (Environment.UserInteractive &&
+                        !string.IsNullOrEmpty(expiryStr) && !_expiryWarnShown &&
                         DateTime.TryParse(expiryStr, out exp))
                     {
                         TimeSpan rem = exp.ToUniversalTime() - DateTime.UtcNow;
