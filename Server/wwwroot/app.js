@@ -670,8 +670,9 @@ function badge(status) {
 function today() { return new Date().toISOString().slice(0,10); }
 
 function hoursExpired(activatedAt, durationHours) {
-  const exp = new Date(activatedAt);
-  exp.setTime(exp.getTime() + durationHours * 3600000);
+  // activatedAt stored as UTC without Z — force UTC parse
+  const utcStr = activatedAt.replace(' ', 'T') + (activatedAt.endsWith('Z') ? '' : 'Z');
+  const exp = new Date(new Date(utcStr).getTime() + durationHours * 3600000);
   return new Date() > exp;
 }
 

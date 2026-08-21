@@ -384,7 +384,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
 
         if (lic.Type == "days") {
             if (!string.IsNullOrEmpty(lic.ActivatedAt)) {
-                if (DateTime.TryParse(lic.ActivatedAt, out var ad)) {
+                if (DateTime.TryParse(lic.ActivatedAt, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var ad)) {
                     if (DateTime.UtcNow > ad.AddHours(lic.DurationDays))  // DurationDays stored as hours
                         return Results.Json(new { status="expired" });
                 }
@@ -421,7 +421,7 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
 
         // Return remaining days for days-type
         object extra = new { };
-        if (lic.Type == "days" && !string.IsNullOrEmpty(lic.ActivatedAt) && DateTime.TryParse(lic.ActivatedAt, out var act))
+        if (lic.Type == "days" && !string.IsNullOrEmpty(lic.ActivatedAt) && DateTime.TryParse(lic.ActivatedAt, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var act))
             extra = new { hoursRemaining = (int)(act.AddHours(lic.DurationDays) - DateTime.UtcNow).TotalHours };
 
         return Results.Json(new { status="ok", licenseType=lic.Type, expiry=lic.Expiry, durationDays=lic.DurationDays, activatedAt=lic.ActivatedAt, extra });
@@ -725,13 +725,13 @@ static class DB
                 DateTime? expiryUtcDt = null;
                 if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ex))
                     expiryUtcDt = ex.ToUniversalTime();
-                else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
+                else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var adx))
                     expiryUtcDt = adx.AddHours(durDays);
                 else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hex))
                     expiryUtcDt = hex.ToUniversalTime();
                 if (expiryUtcDt.HasValue) {
                     daysLeft = (int)(expiryUtcDt.Value - DateTime.UtcNow).TotalMinutes;
-                    expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value).ToUnixTimeMilliseconds();
+                    expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value, TimeSpan.Zero).ToUnixTimeMilliseconds();
                     if (licType == "days") dispExpiry = expiryUtcDt.Value.ToString("yyyy-MM-dd HH:mm");
                 }
             }
@@ -840,14 +840,14 @@ static class DB
             DateTime? expiryUtcDt = null;
             if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed)) {
                 expiryUtcDt = ed.ToUniversalTime();
-            } else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad)) {
+            } else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, null, System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal, out var ad)) {
                 expiryUtcDt = ad.AddHours(durDays);
             } else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hred)) {
                 expiryUtcDt = hred.ToUniversalTime();
             }
             if (expiryUtcDt.HasValue) {
                 daysLeft = (int)(expiryUtcDt.Value - DateTime.UtcNow).TotalMinutes;
-                expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value).ToUnixTimeMilliseconds();
+                expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value, TimeSpan.Zero).ToUnixTimeMilliseconds();
             }
             // Compute display expiry string for expiry-based types
             string dispExpiry = "";
