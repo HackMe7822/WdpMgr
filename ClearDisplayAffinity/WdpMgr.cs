@@ -138,7 +138,8 @@ namespace WdpMgr
             ClientSize      = new Size(540, 242);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox     = false;
-            StartPosition   = FormStartPosition.CenterScreen;
+            MinimizeBox     = true;
+            StartPosition   = FormStartPosition.Manual;
             BackColor       = BG;
             Font            = new Font("Segoe UI", 9f);
             try {
@@ -213,6 +214,10 @@ namespace WdpMgr
             _btnClose.Click     += (s, e) => Close();
 
             RefreshStatus();
+
+            // Position bottom-right of the working area (above taskbar)
+            var wa = Screen.PrimaryScreen.WorkingArea;
+            Location = new Point(wa.Right - Width - 20, wa.Bottom - Height - 20);
 
             // Refresh status bar every second so the countdown stays live
             _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
