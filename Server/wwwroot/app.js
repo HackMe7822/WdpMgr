@@ -146,6 +146,7 @@ function loadDashboard() {
     document.getElementById('s-active').textContent  = d.activeLicenses;
     document.getElementById('s-expired').textContent = d.expiredLicenses;
     document.getElementById('s-revoked').textContent = d.revokedLicenses;
+    document.getElementById('s-total-machines').textContent = d.totalMachines ?? 0;
     document.getElementById('s-machines').textContent= d.activeMachines;
     document.getElementById('s-offline').textContent = d.offlineMachines ?? 0;
     document.getElementById('s-users').textContent   = d.totalAdminUsers;

@@ -554,6 +554,7 @@ static class DB
             activeLicenses  = Q("SELECT COUNT(*) FROM licenses WHERE revoked=0"),
             expiredLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=0 AND type='temp' AND expiry<>'' AND expiry < date('now')"),
             revokedLicenses = Q("SELECT COUNT(*) FROM licenses WHERE revoked=1"),
+            totalMachines   = Q("SELECT COUNT(*) FROM machines"),
             activeMachines  = Q("SELECT COUNT(*) FROM machines WHERE status='active'"),
             offlineMachines = Q("SELECT COUNT(*) FROM machines WHERE status='offline'"),
             totalApps       = Q("SELECT COUNT(*) FROM apps"),

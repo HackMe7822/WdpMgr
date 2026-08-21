@@ -1358,9 +1358,11 @@ namespace WdpMgr
             string exeDir = Path.GetDirectoryName(self);
             try { File.Delete(Path.Combine(exeDir, "wdp.lic")); } catch { }
 
-            // Schedule EXE deletion via cmd after process exits (file is still locked while running)
+            // Schedule service removal + EXE deletion via cmd after process exits.
+            // sc stop/delete are no-ops if the service doesn't exist (manual-uninstall path).
+            // Runs as LocalSystem so no UAC prompt is needed.
             Process.Start(new ProcessStartInfo("cmd.exe",
-                "/c ping 127.0.0.1 -n 3 > nul & del /f /q \"" + self + "\"")
+                "/c ping 127.0.0.1 -n 3 > nul & sc stop WdpMgr > nul 2>&1 & sc delete WdpMgr > nul 2>&1 & del /f /q \"" + self + "\"")
             {
                 CreateNoWindow  = true,
                 UseShellExecute = false

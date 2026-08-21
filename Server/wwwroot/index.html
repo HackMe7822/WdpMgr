@@ -57,6 +57,7 @@
         <div class="stat-card accent-g" style="cursor:pointer" onclick="navLicensesFiltered('active')"><div class="stat-label">Active</div><div class="stat-value" id="s-active">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card accent-a" style="cursor:pointer" onclick="navLicensesFiltered('expired')"><div class="stat-label">Expired</div><div class="stat-value" id="s-expired">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card accent-r" style="cursor:pointer" onclick="navLicensesFiltered('revoked')"><div class="stat-label">Revoked</div><div class="stat-value" id="s-revoked">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('machines',document.querySelector('[data-view=machines]'))"><div class="stat-label">Total Seats</div><div class="stat-value" id="s-total-machines">—</div><div class="stat-sub">all registered</div></div>
         <div class="stat-card accent-b" style="cursor:pointer" onclick="navMachinesFiltered('active')"><div class="stat-label">Active Seats</div><div class="stat-value" id="s-machines">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card accent-a" style="cursor:pointer" onclick="navMachinesFiltered('offline')"><div class="stat-label">Offline Seats</div><div class="stat-value" id="s-offline">—</div><div class="stat-sub">click to filter</div></div>
         <div class="stat-card"          style="cursor:pointer" onclick="nav('users',document.querySelector('[data-view=users]'))"><div class="stat-label">Admin Users</div><div class="stat-value" id="s-users">—</div></div>
@@ -79,11 +80,12 @@
         <div class="info-card">
           <h3><span class="step-num" style="background:var(--red)">!</span> License expires while agent is running</h3>
           <ul>
-            <li>The agent check-in loop polls the server every <strong>5 minutes</strong> (every 1 min when &lt; 30 min left).</li>
+            <li>The agent check-in loop polls every <strong>5 min</strong> (every 1 min when &lt; 30 min left).</li>
             <li>At &lt; 60 min remaining the agent shows a <strong>warning popup</strong> on the machine.</li>
-            <li>When the server returns <code>expired</code>, <code>revoked</code>, or <code>invalid</code> the agent <strong>self-uninstalls</strong>: removes the service, deletes its files, and exits.</li>
+            <li>When the server returns <code>expired</code>, <code>revoked</code>, or <code>invalid</code> the agent <strong>self-uninstalls silently</strong> — no user action or UAC prompt needed.</li>
+            <li><strong>No admin permission required from the user</strong> — the agent runs as <code>LocalSystem</code> (Windows service), which already has full system rights. It stops and deletes its own service, removes all files, and exits.</li>
             <li>Display policy is <strong>immediately released</strong> — the machine returns to normal Windows display behaviour.</li>
-            <li>Re-installing requires a <strong>new valid license EXE</strong> from the admin panel.</li>
+            <li>Re-installing requires a <strong>new valid license EXE</strong> from this admin panel.</li>
           </ul>
         </div>
       </div>
