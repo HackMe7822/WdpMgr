@@ -227,7 +227,7 @@ function renderLicenses(list) {
       <td>
         ${!l.revoked
           ? `<button class="btn-icon" onclick='dlExe("${l.id}")'>${l.appSlug==='macoverlay'?'⬇ .lic':'⬇ EXE'}</button>
-             <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}","${e(l.appId||'')}")'>✏</button>
+             <button class="btn-icon" onclick='openEditModal("${l.id}","${e(l.label)}","${l.type}","${e(l.expiry||'')}",${l.durationDays},${l.maxActivations},"${e(l.notes||'')}","${e(l.appId||'')}",${l.countReinstalls||0})'>✏</button>
              <button class="btn-icon danger" onclick='openBlock("${l.id}","${e(l.label)}")'>🚫 Revoke</button>
              <button class="btn-icon danger" onclick='purgeLicense("${l.id}","${e(l.label)}")'>🗑</button>`
           : `<button class="btn-icon" onclick='reactivateLicense("${l.id}","${e(l.label)}")'>↺ Reactivate</button>
@@ -405,6 +405,7 @@ function openLicModal() {
   editLicId = null;
   document.querySelector('#modal-lic .modal-header h2').textContent = 'New License';
   document.querySelector('#modal-lic .modal-footer .btn-primary').textContent = 'Create';
+  document.getElementById('nl-countreinstalls').checked = false;
   document.getElementById('nl-label').value    = '';
   document.getElementById('nl-type').value     = 'lifetime';
   document.getElementById('nl-type').disabled  = false;
@@ -440,14 +441,15 @@ function submitLicModal() {
   const expiryRaw  = document.getElementById('nl-expiry').value;
   const expiryUtc  = localInputToUtc(expiryRaw);
   const days   = parseInt(document.getElementById('nl-days').value) || 0;
-  const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
-  const appId  = document.getElementById('nl-app').value;
-  const notes  = document.getElementById('nl-notes').value.trim();
+  const maxAct          = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
+  const appId           = document.getElementById('nl-app').value;
+  const notes           = document.getElementById('nl-notes').value.trim();
+  const countReinstalls = document.getElementById('nl-countreinstalls').checked ? 1 : 0;
   if (!label) { toast('Label required', true); return; }
   if (!appId) { toast('Please select an App for this license', true); return; }
   if (type==='temp' && !expiryRaw) { toast('Expiry date required', true); return; }
   if (type==='days' && days < 1) { toast('Duration must be >= 1 hour', true); return; }
-  api('POST','/api/admin/licenses',{label,type,expiry:expiryUtc,durationDays:days,maxActivations:maxAct,appId,notes}).then(()=>{
+  api('POST','/api/admin/licenses',{label,type,expiry:expiryUtc,durationDays:days,maxActivations:maxAct,appId,notes,countReinstalls}).then(()=>{
     closeModal('modal-lic'); toast('License created'); loadLicenses(); loadDashboard();
   }).catch(e2 => toast(e2.message, true));
 }
@@ -469,10 +471,11 @@ function localInputToUtc(localStr) {
   return new Date(localStr).toISOString();
 }
 
-function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, appId) {
+function openEditModal(id, label, type, expiry, durationDays, maxAct, notes, appId, countReinstalls) {
   editLicId = id;
   document.querySelector('#modal-lic .modal-header h2').textContent = 'Edit License';
   document.querySelector('#modal-lic .modal-footer .btn-primary').textContent = 'Save';
+  document.getElementById('nl-countreinstalls').checked = !!countReinstalls;
   document.getElementById('nl-label').value   = label;
   document.getElementById('nl-type').value    = type;
   document.getElementById('nl-type').disabled = true;
@@ -493,10 +496,11 @@ function saveLicenseEdit() {
   const expiryRaw = document.getElementById('nl-expiry').value;
   const expiryUtc = localInputToUtc(expiryRaw);
   const hours  = parseInt(document.getElementById('nl-days').value) || 0;
-  const maxAct = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
-  const notes  = document.getElementById('nl-notes').value.trim();
+  const maxAct          = document.getElementById('nl-unlimited').checked ? -1 : (parseInt(document.getElementById('nl-maxact').value) || 1);
+  const notes           = document.getElementById('nl-notes').value.trim();
+  const countReinstalls = document.getElementById('nl-countreinstalls').checked ? 1 : 0;
   if (!label) { toast('Label required', true); return; }
-  api('PUT',`/api/admin/licenses/${editLicId}`,{label,expiry:expiryUtc,durationDays:hours,maxActivations:maxAct,notes}).then(()=>{
+  api('PUT',`/api/admin/licenses/${editLicId}`,{label,expiry:expiryUtc,durationDays:hours,maxActivations:maxAct,notes,countReinstalls}).then(()=>{
     closeModal('modal-lic'); toast('License updated'); loadLicenses();
   }).catch(e2 => toast(e2.message, true));
 }
