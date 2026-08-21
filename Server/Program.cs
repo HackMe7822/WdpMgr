@@ -156,9 +156,8 @@ app.MapPost("/api/admin/licenses", async (HttpContext ctx) => {
     string expiry  = S(r, "expiry");             // for temp
     string notes   = S(r, "notes");
     string appId   = S(r, "appId");
-    int maxAct          = I(r, "maxActivations", 1);  // machines (or seats for hr)
-    int durDays         = I(r, "durationDays", 0);    // for days type
-    int countReinstalls = I(r, "countReinstalls", 0);
+    int maxAct     = I(r, "maxActivations", 1);  // machines (or seats for hr)
+    int durDays    = I(r, "durationDays", 0);    // for days type
     if (string.IsNullOrWhiteSpace(label))
         return Results.Json(new { error = "label required" }, statusCode: 400);
     if (!new[]{"lifetime","temp","days","hr"}.Contains(type))
@@ -170,8 +169,8 @@ app.MapPost("/api/admin/licenses", async (HttpContext ctx) => {
     string id     = Guid.NewGuid().ToString();
     string issued = DateTime.UtcNow.ToString("yyyy-MM-dd");
     using var db  = DB.Open(dbPath);
-    DB.CreateLicense(db, id, label, type, expiry, issued, maxAct, durDays, appId, notes, countReinstalls);
-    return Results.Json(new { id, label, type, expiry, issued, maxActivations=maxAct, durationDays=durDays, appId, notes, revoked=false, countReinstalls });
+    DB.CreateLicense(db, id, label, type, expiry, issued, maxAct, durDays, appId, notes);
+    return Results.Json(new { id, label, type, expiry, issued, maxActivations=maxAct, durationDays=durDays, appId, notes, revoked=false });
 });
 app.MapDelete("/api/admin/licenses/{id}", (HttpContext ctx, string id) => {
     if (!AdminOk(ctx)) return Unauth();
@@ -186,13 +185,12 @@ app.MapPut("/api/admin/licenses/{id}", async (HttpContext ctx, string id) => {
     string label    = S(r, "label");
     string expiry   = S(r, "expiry");
     string notes    = S(r, "notes");
-    int maxAct          = I(r, "maxActivations", 1);
-    int durDays         = I(r, "durationDays", 0);
-    int countReinstalls = I(r, "countReinstalls", 0);
+    int maxAct      = I(r, "maxActivations", 1);
+    int durDays     = I(r, "durationDays", 0);
     if (string.IsNullOrWhiteSpace(label))
         return Results.Json(new { error = "label required" }, statusCode: 400);
     using var db = DB.Open(dbPath);
-    DB.UpdateLicense(db, id, label, expiry, notes, maxAct, durDays, countReinstalls);
+    DB.UpdateLicense(db, id, label, expiry, notes, maxAct, durDays);
     return Results.Json(new { ok = true });
 });
 app.MapPost("/api/admin/licenses/{id}/reactivate", (HttpContext ctx, string id) => {
@@ -400,12 +398,8 @@ app.MapPost("/api/checkin", async (HttpContext ctx) => {
         var machine = DB.GetMachineByLicAndSeat(db, licId, seatKey);
         // Migration: old rows used fp|winUser format — find and migrate them to fp-only
         if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
-        // count_reinstalls: only treat explicitly uninstalled machines as new installs (not natural offline)
-        bool countReinstalls = lic.CountReinstalls == 1;
-        if (machine != null && machine.Status == "uninstalled" && countReinstalls)
-            machine = null;
         if (machine == null) {
-            int cur = DB.GetActivationCount(db, licId, countReinstalls);
+            int cur = DB.GetActivationCount(db, licId);
             if (lic.MaxActivations > 0 && cur >= lic.MaxActivations)
                 return Results.Json(new { status="wrong_machine", message="max activations reached" });
             // First activation of a days-license: record activated_at
@@ -445,7 +439,7 @@ app.MapPost("/api/uninstall", async (HttpContext ctx) => {
         var machine   = DB.GetMachineByLicAndSeat(db, licId, fp);
         if (machine == null) machine = DB.GetMachineByFingerprintPrefix(db, licId, fp);
         if (machine != null && machine.Status == "active")
-            DB.SetMachineStatus(db, machine.Id, "uninstalled");
+            DB.SetMachineOffline(db, machine.Id);
         return Results.Json(new { ok = true });
     } catch {
         return Results.Json(new { ok = true }); // silent — uninstall must not error
@@ -523,7 +517,6 @@ static class DB
             ("machines","windows_user", "TEXT NOT NULL DEFAULT ''"),
             ("apps",    "slug",         "TEXT NOT NULL DEFAULT ''"),
             ("licenses","notes",        "TEXT NOT NULL DEFAULT ''"),
-            ("licenses","count_reinstalls","INTEGER NOT NULL DEFAULT 0"),
         }) {
             try { Exec(db, $"ALTER TABLE {col.Item1} ADD COLUMN {col.Item2} {col.Item3}"); } catch {}
         }
@@ -700,14 +693,14 @@ static class DB
 
     // ── Licenses ───────────────────────────────────────────────────────────────
     public record LicenseRow(string Id, string Label, string Type, string Expiry, string Issued,
-        bool Revoked, int MaxActivations, int DurationDays, string ActivatedAt, string AppId, string Notes, int CountReinstalls);
+        bool Revoked, int MaxActivations, int DurationDays, string ActivatedAt, string AppId, string Notes);
 
     public static List<object> GetLicenses(SqliteConnection db) {
         var list = new List<object>();
         using var c = db.CreateCommand();
         c.CommandText = @"SELECT l.id,l.label,l.type,l.expiry,l.issued,l.revoked,l.max_activations,
                                  l.duration_days,l.activated_at,l.app_id,l.notes,
-                                 a.name, COUNT(m.id) as seats, a.slug, l.count_reinstalls
+                                 a.name, COUNT(m.id) as seats, a.slug
                           FROM licenses l
                           LEFT JOIN apps a ON a.id=l.app_id
                           LEFT JOIN machines m ON m.license_id=l.id AND m.status='active'
@@ -746,7 +739,6 @@ static class DB
                 appName=r.IsDBNull(11)?"":r.GetString(11),
                 activeSeats=r.GetInt32(12),
                 appSlug=r.IsDBNull(13)?"":r.GetString(13),
-                countReinstalls=r.GetInt32(14),
                 daysLeft, expiryEpochMs, expiryDisplay=dispExpiry
             });
         }
@@ -755,36 +747,35 @@ static class DB
 
     public static LicenseRow? GetLicenseById(SqliteConnection db, string id) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,label,type,expiry,issued,revoked,max_activations,duration_days,activated_at,app_id,notes,count_reinstalls FROM licenses WHERE id=$id";
+        c.CommandText = "SELECT id,label,type,expiry,issued,revoked,max_activations,duration_days,activated_at,app_id,notes FROM licenses WHERE id=$id";
         c.Parameters.AddWithValue("$id", id);
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;
         return new LicenseRow(r.GetString(0),r.GetString(1),r.GetString(2),r.GetString(3),
-            r.GetString(4),r.GetInt32(5)==1,r.GetInt32(6),r.GetInt32(7),r.GetString(8),r.GetString(9),r.GetString(10),r.GetInt32(11));
+            r.GetString(4),r.GetInt32(5)==1,r.GetInt32(6),r.GetInt32(7),r.GetString(8),r.GetString(9),r.GetString(10));
     }
 
     public static void CreateLicense(SqliteConnection db, string id, string label, string type,
-        string expiry, string issued, int maxAct, int durDays, string appId, string notes, int countReinstalls = 0) {
+        string expiry, string issued, int maxAct, int durDays, string appId, string notes) {
         using var c = db.CreateCommand();
-        c.CommandText = @"INSERT INTO licenses(id,label,type,expiry,issued,max_activations,duration_days,app_id,notes,count_reinstalls)
-                          VALUES($id,$l,$t,$e,$i,$m,$d,$a,$n,$cr)";
+        c.CommandText = @"INSERT INTO licenses(id,label,type,expiry,issued,max_activations,duration_days,app_id,notes)
+                          VALUES($id,$l,$t,$e,$i,$m,$d,$a,$n)";
         c.Parameters.AddWithValue("$id", id);  c.Parameters.AddWithValue("$l",  label);
         c.Parameters.AddWithValue("$t",  type); c.Parameters.AddWithValue("$e",  expiry);
         c.Parameters.AddWithValue("$i",  issued); c.Parameters.AddWithValue("$m",  maxAct);
         c.Parameters.AddWithValue("$d",  durDays); c.Parameters.AddWithValue("$a",  appId);
-        c.Parameters.AddWithValue("$n",  notes); c.Parameters.AddWithValue("$cr", countReinstalls);
+        c.Parameters.AddWithValue("$n",  notes);
         c.ExecuteNonQuery();
     }
 
-    public static void UpdateLicense(SqliteConnection db, string id, string label, string expiry, string notes, int maxAct, int durDays, int countReinstalls = 0) {
+    public static void UpdateLicense(SqliteConnection db, string id, string label, string expiry, string notes, int maxAct, int durDays) {
         using var c = db.CreateCommand();
-        c.CommandText = @"UPDATE licenses SET label=$l,expiry=$e,notes=$n,max_activations=$m,duration_days=$d,count_reinstalls=$cr WHERE id=$id";
+        c.CommandText = @"UPDATE licenses SET label=$l,expiry=$e,notes=$n,max_activations=$m,duration_days=$d WHERE id=$id";
         c.Parameters.AddWithValue("$l",  label);
         c.Parameters.AddWithValue("$e",  expiry);
         c.Parameters.AddWithValue("$n",  notes);
         c.Parameters.AddWithValue("$m",  maxAct);
         c.Parameters.AddWithValue("$d",  durDays);
-        c.Parameters.AddWithValue("$cr", countReinstalls);
         c.Parameters.AddWithValue("$id", id);
         c.ExecuteNonQuery();
     }
@@ -872,7 +863,7 @@ static class DB
 
     public static MachineRow? GetMachineByLicAndSeat(SqliteConnection db, string licId, string seatKey) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'offline' THEN 1 ELSE 2 END LIMIT 1";
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND seat_key=$sk LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId); c.Parameters.AddWithValue("$sk", seatKey);
         using var r = c.ExecuteReader();
         if (!r.Read()) return null;
@@ -882,7 +873,7 @@ static class DB
 
     public static MachineRow? GetMachineByFingerprintPrefix(SqliteConnection db, string licId, string fp) {
         using var c = db.CreateCommand();
-        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$fp OR seat_key LIKE $pre) ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'offline' THEN 1 ELSE 2 END LIMIT 1";
+        c.CommandText = "SELECT id,license_id,seat_key,hostname,windows_user,ip_address,first_seen,last_seen,status FROM machines WHERE license_id=$lic AND (seat_key=$fp OR seat_key LIKE $pre) LIMIT 1";
         c.Parameters.AddWithValue("$lic", licId);
         c.Parameters.AddWithValue("$fp",  fp);
         c.Parameters.AddWithValue("$pre", fp + "|%");
@@ -900,12 +891,9 @@ static class DB
         c.ExecuteNonQuery();
     }
 
-    public static int GetActivationCount(SqliteConnection db, string licId, bool countAll = false) {
+    public static int GetActivationCount(SqliteConnection db, string licId) {
         using var c = db.CreateCommand();
-        // countAll=true: count active+uninstalled (not offline/revoked) — used when count_reinstalls is on
-        c.CommandText = countAll
-            ? "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND (status='active' OR status='uninstalled')"
-            : "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
+        c.CommandText = "SELECT COUNT(*) FROM machines WHERE license_id=$lic AND status='active'";
         c.Parameters.AddWithValue("$lic", licId);
         return (int)(long)c.ExecuteScalar()!;
     }
@@ -926,8 +914,8 @@ static class DB
     public static void UpdateMachineCheckin(SqliteConnection db, string id, string host, string ip) {
         string now = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss");
         using var c = db.CreateCommand();
-        // Reset offline/uninstalled→active on reconnect; leave revoked as-is
-        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip,status=CASE WHEN status IN ('offline','uninstalled') THEN 'active' ELSE status END WHERE id=$id";
+        // Reset offline→active on reconnect; leave revoked as-is
+        c.CommandText = "UPDATE machines SET last_seen=$t,hostname=$h,ip_address=$ip,status=CASE WHEN status='offline' THEN 'active' ELSE status END WHERE id=$id";
         c.Parameters.AddWithValue("$t", now); c.Parameters.AddWithValue("$h", host);
         c.Parameters.AddWithValue("$ip", ip); c.Parameters.AddWithValue("$id", id);
         c.ExecuteNonQuery();
@@ -937,13 +925,6 @@ static class DB
         using var c = db.CreateCommand();
         c.CommandText = "UPDATE machines SET status='offline' WHERE id=$id";
         c.Parameters.AddWithValue("$id", id); c.ExecuteNonQuery();
-    }
-
-    public static void SetMachineStatus(SqliteConnection db, string id, string status) {
-        using var c = db.CreateCommand();
-        c.CommandText = "UPDATE machines SET status=$s WHERE id=$id";
-        c.Parameters.AddWithValue("$s", status); c.Parameters.AddWithValue("$id", id);
-        c.ExecuteNonQuery();
     }
 
     public static void MarkOfflineMachines(SqliteConnection db, int thresholdMinutes = 15) {

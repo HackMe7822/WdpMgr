@@ -446,9 +446,6 @@ namespace WdpMgr
         {
             if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
             if (MessageBox.Show("Stop and remove the Windows Display Policy Manager service?\n\nThis will also permanently delete the application.", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            SetBusy("Notifying server...");
-            LicenseData lic; Program.ReadLicense(out lic);
-            Program.NotifyUninstall(lic);
             SetBusy("Stopping service...");
             Program.UninstallService();
             SetBusy("Removing files...");
@@ -1101,22 +1098,6 @@ namespace WdpMgr
                 return BitConverter.ToString(h).Replace("-", "").ToLowerInvariant();
             }
             catch { return "unknown"; }
-        }
-
-        internal static void NotifyUninstall(LicenseData lic)
-        {
-            if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return;
-            try
-            {
-                string fp   = GetFingerprint();
-                string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
-                            + "\"fingerprint\":\"" + fp + "\"}";
-                var wc = new System.Net.WebClient();
-                wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
-                wc.Encoding = Encoding.UTF8;
-                wc.UploadString(lic.Server.TrimEnd('/') + "/api/uninstall", json);
-            }
-            catch { }
         }
 
         private static string WmiGet(string cls, string prop)
