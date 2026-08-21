@@ -190,6 +190,12 @@ app.MapPut("/api/admin/licenses/{id}", async (HttpContext ctx, string id) => {
     if (string.IsNullOrWhiteSpace(label))
         return Results.Json(new { error = "label required" }, statusCode: 400);
     using var db = DB.Open(dbPath);
+    // Block seat-count downgrade if registered machines already exceed new max
+    if (maxAct > 0) {
+        int registered = DB.GetActivationCount(db, id);
+        if (registered > maxAct)
+            return Results.Json(new { error = $"{registered} machine(s) already registered for this license. Delete excess machines first, then reduce the seat count." }, statusCode: 409);
+    }
     DB.UpdateLicense(db, id, label, expiry, notes, maxAct, durDays);
     return Results.Json(new { ok = true });
 });
