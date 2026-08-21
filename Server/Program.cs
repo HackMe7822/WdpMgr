@@ -713,19 +713,24 @@ static class DB
             var durDays  = r.GetInt32(7);
             var revoked  = r.GetInt32(5) == 1;
             int? daysLeft = null;
+            long? expiryEpochMs = null;
             string dispExpiry = "";
             if (!revoked) {
+                DateTime? expiryUtcDt = null;
                 if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ex))
-                    daysLeft = (int)(ex.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
+                    expiryUtcDt = ex.ToUniversalTime();
                 else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
-                    daysLeft = (int)(adx.AddHours(durDays) - DateTime.UtcNow).TotalMinutes;
+                    expiryUtcDt = adx.AddHours(durDays);
                 else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hex))
-                    daysLeft = (int)(hex.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
+                    expiryUtcDt = hex.ToUniversalTime();
+                if (expiryUtcDt.HasValue) {
+                    daysLeft = (int)(expiryUtcDt.Value - DateTime.UtcNow).TotalMinutes;
+                    expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value).ToUnixTimeMilliseconds();
+                    if (licType == "days") dispExpiry = expiryUtcDt.Value.ToString("yyyy-MM-dd HH:mm");
+                }
             }
             if ((licType == "temp" || licType == "hr") && !string.IsNullOrEmpty(expiry))
                 dispExpiry = expiry.Replace("T", " ");
-            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx2))
-                dispExpiry = adx2.AddHours(durDays).ToString("yyyy-MM-dd HH:mm");
             list.Add(new {
                 id=r.GetString(0), label=r.GetString(1), type=licType,
                 expiry, issued=r.GetString(4), revoked,
@@ -734,7 +739,7 @@ static class DB
                 appName=r.IsDBNull(11)?"":r.GetString(11),
                 activeSeats=r.GetInt32(12),
                 appSlug=r.IsDBNull(13)?"":r.GetString(13),
-                daysLeft, expiryDisplay=dispExpiry
+                daysLeft, expiryEpochMs, expiryDisplay=dispExpiry
             });
         }
         return list;
@@ -824,26 +829,33 @@ static class DB
             string expiry    = r.IsDBNull(11) ? "" : r.GetString(11);
             int    durDays   = r.IsDBNull(12) ? 0  : r.GetInt32(12);
             string actAt     = r.IsDBNull(13) ? "" : r.GetString(13);
-            int? daysLeft = null; // null = unlimited (lifetime or hr with no expiry); value = minutes remaining
-            if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed))
-                daysLeft = (int)(ed.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
-            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad))
-                daysLeft = (int)(ad.AddHours(durDays) - DateTime.UtcNow).TotalMinutes;
-            else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hred))
-                daysLeft = (int)(hred.ToUniversalTime() - DateTime.UtcNow).TotalMinutes;
+            int? daysLeft = null;   // minutes remaining (null = unlimited)
+            long? expiryEpochMs = null; // exact expiry as Unix ms — used by client for second-precision countdown
+            DateTime? expiryUtcDt = null;
+            if (licType == "temp" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var ed)) {
+                expiryUtcDt = ed.ToUniversalTime();
+            } else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var ad)) {
+                expiryUtcDt = ad.AddHours(durDays);
+            } else if (licType == "hr" && !string.IsNullOrEmpty(expiry) && DateTime.TryParse(expiry, out var hred)) {
+                expiryUtcDt = hred.ToUniversalTime();
+            }
+            if (expiryUtcDt.HasValue) {
+                daysLeft = (int)(expiryUtcDt.Value - DateTime.UtcNow).TotalMinutes;
+                expiryEpochMs = new DateTimeOffset(expiryUtcDt.Value).ToUnixTimeMilliseconds();
+            }
             // Compute display expiry string for expiry-based types
             string dispExpiry = "";
             if ((licType == "temp" || licType == "hr") && !string.IsNullOrEmpty(expiry))
                 dispExpiry = expiry.Replace("T", " ");
-            else if (licType == "days" && !string.IsNullOrEmpty(actAt) && DateTime.TryParse(actAt, out var adx))
-                dispExpiry = adx.AddHours(durDays).ToString("yyyy-MM-dd HH:mm");
+            else if (expiryUtcDt.HasValue && licType == "days")
+                dispExpiry = expiryUtcDt.Value.ToString("yyyy-MM-dd HH:mm");
             list.Add(new {
                 id=r.GetString(0), licenseId=r.GetString(1),
                 licenseLabel=r.IsDBNull(2)?"":r.GetString(2),
                 seatKey=r.GetString(3), hostname=r.GetString(4),
                 windowsUser=r.GetString(5), ipAddress=r.GetString(6),
                 firstSeen=r.GetString(7), lastSeen=r.GetString(8), status=r.GetString(9),
-                licenseType=licType, daysLeft, expiryDisplay=dispExpiry
+                licenseType=licType, daysLeft, expiryEpochMs, expiryDisplay=dispExpiry
             });
         }
         return list;
@@ -1051,7 +1063,7 @@ class OfflineDetectorService(string dbPath) : BackgroundService
         while (!ct.IsCancellationRequested) {
             try {
                 using var db = DB.Open(dbPath);
-                DB.MarkOfflineMachines(db, thresholdMinutes: 15);
+                DB.MarkOfflineMachines(db, thresholdMinutes: 6);
             } catch (Exception ex) {
                 Console.WriteLine($"[WARN] OfflineDetector: {ex.Message}");
             }

@@ -76,6 +76,7 @@ let currentView = 'dashboard';
 let _autoRefreshTimer = null;
 
 function nav(name, el) {
+  stopCountdowns(); // stop ticker when leaving licenses/machines
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const view = document.getElementById('view-' + name);
@@ -185,11 +186,12 @@ function filterLicenses() {
 }
 function renderLicenses(list) {
   const tbody = document.getElementById('lic-body');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses found.</td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No licenses found.</td></tr>'; stopCountdowns(); return; }
   tbody.innerHTML = list.map(l => {
     const unlimited = l.maxActivations < 0;
+    // Status computed from live time so it flips immediately at expiry
     const status = l.revoked ? 'revoked'
-      : (l.type==='temp' && l.expiry && new Date(l.expiry) < new Date()) ? 'expired'
+      : (l.expiryEpochMs && l.expiryEpochMs < Date.now()) ? 'expired'
       : (l.type==='days' && l.activatedAt && hoursExpired(l.activatedAt, l.durationDays)) ? 'expired'
       : 'active';
     let expCol;
@@ -197,21 +199,11 @@ function renderLicenses(list) {
       expCol = '∞ Lifetime';
     } else if (l.revoked) {
       expCol = '<span class="muted">—</span>';
-    } else if (l.daysLeft === null || l.daysLeft === undefined) {
-      // days type not yet activated
+    } else if (l.expiryEpochMs == null) {
       expCol = l.type === 'days' ? fmtHours(l.durationDays) + ' <span class="muted">(not activated)</span>' : '—';
-    } else if (l.daysLeft < 0) {
-      const expStr = l.expiryDisplay ? ' (' + l.expiryDisplay + ')' : '';
-      expCol = '<span style="color:#e05a5a">Expired' + expStr + '</span>';
     } else {
-      const warn = l.daysLeft <= 2880;
-      const color = warn ? '#e08a3a' : '#4caf82';
-      if (l.daysLeft >= 2880 && l.expiryDisplay) {
-        expCol = '<span style="color:' + color + '" title="' + fmtMins(l.daysLeft) + ' remaining">' + l.expiryDisplay + '</span>';
-      } else {
-        const title = l.expiryDisplay ? ' title="Expires ' + l.expiryDisplay + '"' : '';
-        expCol = '<span style="color:' + color + '"' + title + '>' + fmtMins(l.daysLeft) + '</span>';
-      }
+      // Live countdown span — updated every second by _tickCountdowns()
+      expCol = `<span data-expires-ms="${l.expiryEpochMs}" data-expiry-display="${e(l.expiryDisplay||'')}"></span>`;
     }
     const seatsCol = unlimited ? `${l.activeSeats} / ∞` : `${l.activeSeats} / ${l.maxActivations}`;
     return `<tr>
@@ -233,6 +225,7 @@ function renderLicenses(list) {
         }
       </td></tr>`;
   }).join('');
+  startCountdowns();
 }
 
 // ── Machines ──────────────────────────────────────────────────────────────────
@@ -255,28 +248,14 @@ function filterMachines() {
 }
 function renderMachines(list) {
   const tbody = document.getElementById('mach-body');
-  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines found.</td></tr>'; return; }
+  if (!list.length) { tbody.innerHTML = '<tr><td colspan="9" class="empty">No machines found.</td></tr>'; stopCountdowns(); return; }
   tbody.innerHTML = list.map(m => {
-    let timeLeft = '—';
-    if (m.licenseType === 'lifetime' || m.daysLeft === null || m.daysLeft === undefined) {
+    let timeLeft;
+    if (m.licenseType === 'lifetime' || m.expiryEpochMs == null) {
       timeLeft = '<span style="color:var(--green)">∞</span>';
-    } else if (typeof m.daysLeft === 'number') {
-      if (m.daysLeft < 0) {
-        // Show actual expiry date alongside Expired label
-        const expStr = m.expiryDisplay ? ' (' + m.expiryDisplay + ')' : '';
-        timeLeft = `<span style="color:var(--red)">Expired${expStr}</span>`;
-      } else {
-        const warn = m.daysLeft <= 2880; // amber when <= 48h remaining
-        const color = warn ? 'var(--amber)' : 'var(--green)';
-        if (m.daysLeft >= 2880 && m.expiryDisplay) {
-          // More than 48h left — show actual date, time remaining in tooltip
-          timeLeft = `<span style="color:${color}" title="${fmtMins(m.daysLeft)} remaining">${m.expiryDisplay}</span>`;
-        } else {
-          // Under 48h — show countdown, date in tooltip
-          const title = m.expiryDisplay ? ` title="Expires ${m.expiryDisplay}"` : '';
-          timeLeft = `<span style="color:${color}"${title}>${fmtMins(m.daysLeft)}</span>`;
-        }
-      }
+    } else {
+      // Live countdown — updated every second by _tickCountdowns()
+      timeLeft = `<span data-expires-ms="${m.expiryEpochMs}" data-expiry-display="${e(m.expiryDisplay||'')}"></span>`;
     }
     return `<tr>
       <td>${e(m.hostname||'—')}</td>
@@ -296,6 +275,7 @@ function renderMachines(list) {
       </td>
     </tr>`;
   }).join('');
+  startCountdowns();
 }
 
 // ── Apps ──────────────────────────────────────────────────────────────────────
@@ -676,6 +656,43 @@ function fmtMins(m) {
   if (m >= 60)   return Math.floor(m/60) + 'h ' + (m%60 ? (m%60)+'m' : '');
   if (m > 0)     return m + 'm';
   return 'Expired';
+}
+
+// Format milliseconds remaining into a colour-coded HTML countdown string.
+// Used for live second-precision countdowns in both Licenses and Machines tables.
+function fmtMs(ms, expiryDisplay) {
+  const expNote = expiryDisplay ? ` <span class="muted small">(${expiryDisplay})</span>` : '';
+  if (ms <= 0) return `<span style="color:var(--red)">Expired${expNote}</span>`;
+  const totalSec = Math.floor(ms / 1000);
+  const days  = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const mins  = Math.floor((totalSec % 3600) / 60);
+  const secs  = totalSec % 60;
+  let text, color;
+  if (days >= 2)  { text = days + 'd ' + hours + 'h';       color = 'var(--green)'; }
+  else if (days)  { text = days + 'd ' + hours + 'h ' + mins + 'm'; color = 'var(--amber)'; }
+  else if (hours) { text = hours + 'h ' + mins + 'm';        color = 'var(--amber)'; }
+  else if (mins)  { text = mins + 'm ' + String(secs).padStart(2,'0') + 's'; color = 'var(--amber)'; }
+  else            { text = secs + 's';                       color = 'var(--red)'; }
+  const tip = expiryDisplay ? ` title="Expires ${expiryDisplay}"` : '';
+  return `<span style="color:${color}"${tip}>${text}</span>`;
+}
+
+// ── Live countdown ticker (updates every second for Licenses + Machines) ──────
+let _countdownTimer = null;
+function _tickCountdowns() {
+  document.querySelectorAll('[data-expires-ms]').forEach(el => {
+    const ms = Number(el.dataset.expiresMs) - Date.now();
+    el.innerHTML = fmtMs(ms, el.dataset.expiryDisplay || '');
+  });
+}
+function startCountdowns() {
+  stopCountdowns();
+  _tickCountdowns();
+  _countdownTimer = setInterval(_tickCountdowns, 1000);
+}
+function stopCountdowns() {
+  if (_countdownTimer) { clearInterval(_countdownTimer); _countdownTimer = null; }
 }
 
 function noData(cols) { return `<tr><td colspan="${cols}" class="empty">No data yet.</td></tr>`; }
