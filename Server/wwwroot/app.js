@@ -161,7 +161,7 @@ function loadDashboard() {
       <td>${e(m.hostname||'—')}</td>
       <td class="mono">${e(m.windowsUser||'—')}</td>
       <td>${e(m.licenseLabel||m.licenseId)}</td>
-      <td class="muted">${e(m.lastSeen||'—')}</td>
+      <td class="muted">${fmtLocal(m.lastSeen)}</td>
       <td>${badge(m.status)}</td></tr>`).join('');
   }).catch(()=>{});
 }
@@ -283,7 +283,7 @@ function renderMachines(list) {
       <td>${e(m.licenseLabel||m.licenseId)}</td>
       <td class="muted">${e(m.ipAddress||'—')}</td>
       <td>${timeLeft}</td>
-      <td class="muted">${e(m.lastSeen||'—')}</td>
+      <td class="muted">${fmtLocal(m.lastSeen)}</td>
       <td><span class="mono fp" title="${e(m.seatKey)}">${e((m.seatKey||'').substring(0,14))}…</span></td>
       <td>${badge(m.status)}</td>
       <td style="white-space:nowrap">
@@ -668,6 +668,15 @@ function badge(status) {
 }
 
 function today() { return new Date().toISOString().slice(0,10); }
+
+function fmtLocal(utcStr) {
+  if (!utcStr || utcStr === '—') return '—';
+  // DB stores UTC without Z — append Z to force correct UTC parse
+  const s = utcStr.replace(' ', 'T') + (utcStr.endsWith('Z') ? '' : 'Z');
+  const d = new Date(s);
+  if (isNaN(d)) return utcStr;
+  return d.toLocaleString(undefined, {year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+}
 
 function hoursExpired(activatedAt, durationHours) {
   // activatedAt stored as UTC without Z — force UTC parse
