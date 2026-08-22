@@ -244,11 +244,12 @@ app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => 
         string proto = ctx.Request.Headers.TryGetValue("X-Forwarded-Proto", out var xfp2) ? xfp2.ToString() : ctx.Request.Scheme;
         serverUrl = $"{proto}://{ctx.Request.Host}";
     }
+    string relayUrl = DB.GetSetting(db, "relay_url");
     string safeLabel = new string(lic.Label.Select(c => char.IsLetterOrDigit(c) ? c : '_').ToArray());
     string appSlug = DB.GetAppSlug(db, lic.AppId);
     // macoverlay: return standalone .lic file (no binary bundling on Mac)
     if (appSlug == "macoverlay") {
-        string licText = RsaSvc.GenerateLicFile(db, lic, serverUrl);
+        string licText = RsaSvc.GenerateLicFile(db, lic, serverUrl, "");
         string pubKeyB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(RsaSvc.GetPublicKeyXml(db)));
         byte[] licBytes = Encoding.UTF8.GetBytes(licText + "pubkey=" + pubKeyB64 + "\n");
         return Results.File(licBytes, "application/octet-stream", "MacOverlay_" + safeLabel + ".lic");
@@ -269,7 +270,7 @@ app.MapGet("/api/admin/licenses/{id}/download", (HttpContext ctx, string id) => 
     string baseExePath = Path.Combine(dataDir, baseExeName);
     if (!File.Exists(baseExePath))
         return Results.Json(new { error = $"Base {baseExeName} not found on server. Run update.ps1 or upload via Settings." }, statusCode: 400);
-    byte[] bundled = RsaSvc.GenerateBundledExe(db, lic, serverUrl, File.ReadAllBytes(baseExePath));
+    byte[] bundled = RsaSvc.GenerateBundledExe(db, lic, serverUrl, relayUrl, File.ReadAllBytes(baseExePath));
     return Results.File(bundled, "application/octet-stream", exePrefix + "_" + safeLabel + ".exe");
 });
 
@@ -328,6 +329,7 @@ app.MapGet("/api/admin/settings", (HttpContext ctx) => {
     return Results.Json(new {
         adminKey    = masterKey,
         serverUrl   = DB.GetSetting(db, "server_url"),
+        relayUrl    = DB.GetSetting(db, "relay_url"),
         detectedUrl,
         exeUploaded, exeSize
     });
@@ -336,8 +338,10 @@ app.MapPost("/api/admin/settings", async (HttpContext ctx) => {
     if (!AdminOk(ctx)) return Unauth();
     using var doc = await JsonDocument.ParseAsync(ctx.Request.Body);
     string serverUrl = S(doc.RootElement, "serverUrl");
+    string relayUrl  = S(doc.RootElement, "relayUrl");
     using var db = DB.Open(dbPath);
-    DB.SetSetting(db, "server_url", serverUrl.TrimEnd('/'));
+    if (!string.IsNullOrEmpty(serverUrl)) DB.SetSetting(db, "server_url", serverUrl.TrimEnd('/'));
+    if (!string.IsNullOrEmpty(relayUrl))  DB.SetSetting(db, "relay_url",  relayUrl.TrimEnd('/'));
     return Results.Json(new { ok = true });
 });
 
@@ -1010,8 +1014,8 @@ static class RsaSvc
         return (string?)c.ExecuteScalar() ?? "";
     }
 
-    public static byte[] GenerateBundledExe(SqliteConnection db, DB.LicenseRow lic, string serverUrl, byte[] baseExe) {
-        string licText   = GenerateLicFile(db, lic, serverUrl);
+    public static byte[] GenerateBundledExe(SqliteConnection db, DB.LicenseRow lic, string serverUrl, string relayUrl, byte[] baseExe) {
+        string licText   = GenerateLicFile(db, lic, serverUrl, relayUrl);
         string pubKeyXml = GetPublicKeyXml(db);
         string pubKeyB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(pubKeyXml));
         // Append embedded block after PE — Windows ignores trailing data
@@ -1023,12 +1027,13 @@ static class RsaSvc
         return result;
     }
 
-    public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl) {
+    public static string GenerateLicFile(SqliteConnection db, DB.LicenseRow lic, string serverUrl, string relayUrl) {
         // Payload includes durationDays so client can validate days-type locally
         string payload = lic.Id;
         var parms = XmlToParams(GetPrivKeyXml(db), true);
         using var rsa = RSA.Create(); rsa.ImportParameters(parms);
         byte[] sig = rsa.SignData(Encoding.UTF8.GetBytes(payload), HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        string relaySuffix = string.IsNullOrEmpty(relayUrl) ? "" : $"relay={relayUrl}\r\n";
         return $"WDPMGR_LICENSE_V1\r\n" +
                $"id={lic.Id}\r\n" +
                $"type={lic.Type}\r\n" +
@@ -1037,6 +1042,7 @@ static class RsaSvc
                $"durationDays={lic.DurationDays}\r\n" +
                $"appId={lic.AppId}\r\n" +
                $"server={serverUrl}\r\n" +
+               relaySuffix +
                $"sig={Convert.ToBase64String(sig)}\r\n";
     }
 

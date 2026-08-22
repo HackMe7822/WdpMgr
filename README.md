@@ -76,6 +76,74 @@ If the hostname changed, rebuild with the updated server URL embedded in the lic
 
 ---
 
+## Cloudflare Worker Relay (Firewall Bypass)
+
+Some networks (e.g. FortiGuard) block direct access to the WdpMgr server. A Cloudflare Worker at a `*.workers.dev` URL bypasses SNI-based blocking and proxies check-ins to your real server.
+
+### WdpMgr Worker
+
+1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **Workers & Pages** → **Create application** → **Create Worker**
+2. Paste this script and deploy:
+
+```js
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    // Replace with your real WdpMgr server hostname:
+    const target = 'https://bypass.creationsit.com' + url.pathname + url.search;
+    const headers = new Headers(request.headers);
+    headers.delete('host');
+    const resp = await fetch(target, {
+      method:  request.method,
+      headers: headers,
+      body:    request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+    });
+    return new Response(resp.body, { status: resp.status, headers: resp.headers });
+  },
+};
+```
+
+3. Note the Worker URL (e.g. `https://wdp-manager.yourname.workers.dev`)
+4. In **Admin Panel → Settings → Relay URL**, enter the Worker URL and click **Save**
+5. All EXEs downloaded after this will embed the relay URL — if the primary server is blocked, WdpMgr automatically retries via the Worker
+
+### MeshCentral Worker
+
+New agent downloads can point through a Worker so agents install even behind FortiGuard.
+
+1. Create a second Worker and paste:
+
+```js
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    // Replace with your real MeshCentral hostname:
+    const target = 'https://remote.creationsit.com' + url.pathname + url.search;
+    const headers = new Headers(request.headers);
+    headers.delete('host');
+    headers.set('origin', 'https://remote.creationsit.com');
+    const resp = await fetch(target, {
+      method:  request.method,
+      headers: headers,
+      body:    request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
+    });
+    return new Response(resp.body, { status: resp.status, headers: resp.headers });
+  },
+};
+```
+
+2. Note the Worker URL (e.g. `https://meshremote.yourname.workers.dev`)
+3. Edit `C:\MeshCentral\meshcentral-data\config.json` — add to `settings`:
+
+```json
+"agentaliasdns": "meshremote.yourname.workers.dev"
+```
+
+4. Restart MeshCentral (`net stop MeshCentral && net start MeshCentral` in elevated PowerShell)
+5. New agent downloads (`.msi`/`.exe`) will embed the Worker URL as `MeshServer` — agents install and connect even if `remote.creationsit.com` is blocked
+
+---
+
 ## Mac Client
 
 Install on any Mac (builds from source, requires Xcode command line tools):

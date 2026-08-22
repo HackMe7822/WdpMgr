@@ -573,6 +573,8 @@ function dlExe(id) {
 // ── Settings ──────────────────────────────────────────────────────────────────
 function loadSettings() {
   api('GET','/api/admin/settings').then(d => {
+    const relayInput = document.getElementById('relay-url-input');
+    if (relayInput && d.relayUrl) relayInput.value = d.relayUrl;
     const urlInput = document.getElementById('server-url-input');
     if (d.serverUrl) {
       urlInput.value = d.serverUrl;
@@ -596,6 +598,14 @@ function saveServerUrl() {
   if (!url) { toast('Enter a server URL', true); return; }
   api('POST','/api/admin/settings',{serverUrl: url}).then(()=>{
     toast('Server URL saved');
+  }).catch(err => toast(err.message, true));
+}
+
+function saveRelayUrl() {
+  const url = document.getElementById('relay-url-input').value.trim();
+  if (!url) { toast('Enter a relay URL', true); return; }
+  api('POST','/api/admin/settings',{relayUrl: url}).then(()=>{
+    toast('Relay URL saved — new EXE downloads will embed it');
   }).catch(err => toast(err.message, true));
 }
 

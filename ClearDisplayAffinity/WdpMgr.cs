@@ -114,6 +114,7 @@ namespace WdpMgr
         public string DurationDays; // for days-type
         public string AppId;
         public string Server;       // check-in URL
+        public string Relay;        // fallback relay URL (Cloudflare Worker) embedded at download time
         public string Sig;          // base64 RSA-SHA256 signature
         public string PubKey;       // base64-encoded RSA XML (embedded in EXE, overrides constant)
     }
@@ -929,6 +930,7 @@ namespace WdpMgr
                         case "durationDays": lic.DurationDays = v; break;
                         case "appId":        lic.AppId        = v; break;
                         case "server":       lic.Server       = v; break;
+                        case "relay":        lic.Relay        = v; break;
                         case "pubkey":       lic.PubKey       = v; break;
                         case "sig":          lic.Sig          = v; break;
                     }
@@ -977,6 +979,7 @@ namespace WdpMgr
                         case "durationDays": lic.DurationDays = v; break;
                         case "appId":        lic.AppId        = v; break;
                         case "server":       lic.Server       = v; break;
+                        case "relay":        lic.Relay        = v; break;
                         case "pubkey":       lic.PubKey       = v; break;
                         case "sig":          lic.Sig          = v; break;
                     }
@@ -1057,8 +1060,8 @@ namespace WdpMgr
             catch { return false; }
         }
 
-        // Relay URL used as automatic fallback when the primary server is unreachable (e.g. firewall)
-        private const string RELAY_URL = "https://wdp-manager.pulkitarora-782.workers.dev";
+        // Hardcoded relay fallback — used only when no relay= line is embedded in the EXE license
+        private const string RELAY_URL_DEFAULT = "https://wdp-manager.pulkitarora-782.workers.dev";
 
         internal static string CheckIn(LicenseData lic)
         {
@@ -1073,7 +1076,8 @@ namespace WdpMgr
                         + "\"windowsUser\":\"" + winUser + "\","
                         + "\"appId\":\"wdpmgr\"}";
 
-            string[] servers = { lic.Server, RELAY_URL };
+            string relayUrl = !string.IsNullOrEmpty(lic.Relay) ? lic.Relay : RELAY_URL_DEFAULT;
+            string[] servers = { lic.Server, relayUrl };
             foreach (string srv in servers)
             {
                 try

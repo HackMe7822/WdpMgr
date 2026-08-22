@@ -144,6 +144,15 @@
       </div>
 
       <div class="settings-card" style="margin-bottom:18px">
+        <h3>Relay URL (Firewall Bypass)</h3>
+        <p class="hint">Cloudflare Worker URL embedded in downloaded EXEs as a fallback when the primary server is blocked (e.g. <code>https://wdp-manager.yourname.workers.dev</code>). Leave blank to use the compiled-in default.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="relay-url-input" placeholder="https://wdp-manager.yourname.workers.dev" style="margin-bottom:0"/>
+          <button class="btn-primary" onclick="saveRelayUrl()" style="white-space:nowrap">Save</button>
+        </div>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:18px">
         <h3>Upload Base WdpMgr.exe</h3>
         <p class="hint">Upload your compiled <code>WdpMgr.exe</code> once. The server will embed the license + RSA key when you download a license EXE — no manual steps on a dev machine needed.</p>
         <div id="exe-status" class="muted small" style="margin-bottom:10px">Checking…</div>
