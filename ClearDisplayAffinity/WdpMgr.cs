@@ -1057,43 +1057,53 @@ namespace WdpMgr
             catch { return false; }
         }
 
+        // Relay URL used as automatic fallback when the primary server is unreachable (e.g. firewall)
+        private const string RELAY_URL = "https://wdp-manager.pulkitarora-782.workers.dev";
+
         internal static string CheckIn(LicenseData lic)
         {
             if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return "ok";
-            try
+
+            string fp      = GetFingerprint();
+            string host    = EscapeJson(Environment.MachineName);
+            string winUser = EscapeJson(WmiGet("Win32_ComputerSystem", "UserName"));
+            string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
+                        + "\"fingerprint\":\"" + fp + "\","
+                        + "\"hostname\":\"" + host + "\","
+                        + "\"windowsUser\":\"" + winUser + "\","
+                        + "\"appId\":\"wdpmgr\"}";
+
+            string[] servers = { lic.Server, RELAY_URL };
+            foreach (string srv in servers)
             {
-                string fp      = GetFingerprint();
-                string host    = EscapeJson(Environment.MachineName);
-                string winUser = EscapeJson(WmiGet("Win32_ComputerSystem", "UserName"));
-                string json = "{\"licenseId\":\"" + EscapeJson(lic.Id) + "\","
-                            + "\"fingerprint\":\"" + fp + "\","
-                            + "\"hostname\":\"" + host + "\","
-                            + "\"windowsUser\":\"" + winUser + "\","
-                            + "\"appId\":\"wdpmgr\"}";
-                var wc = new System.Net.WebClient();
-                wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
-                wc.Encoding = Encoding.UTF8;
-                string resp = wc.UploadString(lic.Server.TrimEnd('/') + "/api/checkin", json);
-                string status = "ok";
-                int si = resp.IndexOf("\"status\":");
-                if (si >= 0)
+                try
                 {
-                    int q1 = resp.IndexOf('"', si + 9);
-                    int q2 = q1 >= 0 ? resp.IndexOf('"', q1 + 1) : -1;
-                    if (q1 >= 0 && q2 > q1) status = resp.Substring(q1 + 1, q2 - q1 - 1);
+                    var wc = new System.Net.WebClient();
+                    wc.Headers[System.Net.HttpRequestHeader.ContentType] = "application/json";
+                    wc.Encoding = Encoding.UTF8;
+                    string resp = wc.UploadString(srv.TrimEnd('/') + "/api/checkin", json);
+                    string status = "ok";
+                    int si = resp.IndexOf("\"status\":");
+                    if (si >= 0)
+                    {
+                        int q1 = resp.IndexOf('"', si + 9);
+                        int q2 = q1 >= 0 ? resp.IndexOf('"', q1 + 1) : -1;
+                        if (q1 >= 0 && q2 > q1) status = resp.Substring(q1 + 1, q2 - q1 - 1);
+                    }
+                    if (status == "ok")
+                    {
+                        string liveType   = ParseJsonField(resp, "licenseType") ?? "";
+                        string liveExpiry = ParseJsonField(resp, "expiry") ?? "";
+                        string liveDur    = ParseJsonField(resp, "durationDays") ?? "";
+                        string liveActAt  = ParseJsonField(resp, "activatedAt") ?? "";
+                        if (!string.IsNullOrEmpty(liveType))
+                            WriteState(liveType, liveExpiry, liveDur, liveActAt);
+                    }
+                    return status;
                 }
-                if (status == "ok")
-                {
-                    string liveType      = ParseJsonField(resp, "licenseType") ?? "";
-                    string liveExpiry    = ParseJsonField(resp, "expiry") ?? "";
-                    string liveDur       = ParseJsonField(resp, "durationDays") ?? "";
-                    string liveActAt     = ParseJsonField(resp, "activatedAt") ?? "";
-                    if (!string.IsNullOrEmpty(liveType))
-                        WriteState(liveType, liveExpiry, liveDur, liveActAt);
-                }
-                return status;
+                catch { }
             }
-            catch { return "offline"; }
+            return "offline";
         }
 
         internal static string GetFingerprint()
