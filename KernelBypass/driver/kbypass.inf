@@ -1,0 +1,49 @@
+; kbypass.inf — Driver package info for KernelBypass
+; Used by Windows driver installer (and Inf2cat for signing)
+;
+; For test signing (dev/test machines):
+;   bcdedit /set testsigning on
+;   [reboot]
+;   sc create kbypass type= kernel binPath= "C:\path\to\kbypass.sys"
+;   sc start kbypass
+;
+; For production signing: submit to Microsoft Hardware Dev Center for
+; attestation signing with an EV code signing certificate.
+
+[Version]
+Signature   = "$WINDOWS NT$"
+Class       = System
+ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
+Provider    = %ManufacturerName%
+DriverVer   = 08/27/2026,1.0.0.0
+CatalogFile = kbypass.cat
+
+[DestinationDirs]
+DefaultDestDir = 12   ; %windir%\System32\drivers
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+kbypass.sys = 1,,
+
+[DefaultInstall.NT$ARCH$]
+CopyFiles = KBypass.CopyFiles
+
+[DefaultInstall.NT$ARCH$.Services]
+AddService = kbypass,2,KBypass.Service
+
+[KBypass.CopyFiles]
+kbypass.sys
+
+[KBypass.Service]
+DisplayName    = %ServiceDescription%
+ServiceType    = 1     ; SERVICE_KERNEL_DRIVER
+StartType      = 3     ; SERVICE_DEMAND_START
+ErrorControl   = 1     ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %12%\kbypass.sys
+
+[Strings]
+ManufacturerName    = "Creations IT"
+DiskName            = "KernelBypass Driver Disk"
+ServiceDescription  = "KernelBypass WDA Bypass Driver"
