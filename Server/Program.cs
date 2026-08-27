@@ -536,9 +536,10 @@ static class DB
         RsaSvc.EnsureKeys(db);
         // Seed built-in apps (safe to re-run — skips if slug already exists)
         foreach (var a in new[]{
-            ("wdpmgr",    "WdpMgr",     "Windows display policy manager — DLL injection + screen capture bypass"),
-            ("winoverlay","WinOverlay",  "Windows overlay browser — invisible to screen capture/recording"),
-            ("macoverlay","MacOverlay",  "Mac overlay browser — invisible to screen sharing"),
+            ("wdpmgr",     "WdpMgr",          "Windows display policy manager — DLL injection + screen capture bypass"),
+            ("winoverlay", "WinOverlay",       "Windows overlay browser — invisible to screen capture/recording"),
+            ("macoverlay", "MacOverlay",       "Mac overlay browser — invisible to screen sharing"),
+            ("kbypass",    "KernelBypass",     "Kernel-level WDA bypass — system-wide, no injection, works on protected processes"),
         }) {
             using var chk = db.CreateCommand();
             chk.CommandText = "SELECT COUNT(*) FROM apps WHERE slug=$s";

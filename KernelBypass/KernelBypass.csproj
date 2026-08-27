@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>KernelBypass</AssemblyName>
+    <RootNamespace>KernelBypass</RootNamespace>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Description>KernelBypass — kernel-level WDA bypass service</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Security" />
+  </ItemGroup>
+
+  <!--
+    After building kbypass.sys with WDK (see driver/build.bat):
+    1. Copy kbypass.sys into this folder
+    2. Uncomment the EmbeddedResource line below so the .sys is bundled in the exe
+    3. In KernelBypass.cs, replace File.Exists(DriverSysPath) check with
+       resource extraction:
+         var asm = Assembly.GetExecutingAssembly();
+         using var rs = asm.GetManifestResourceStream("KernelBypass.kbypass.sys");
+         using var fs = File.Create(DriverSysPath);
+         rs.CopyTo(fs);
+  -->
+  <!-- <EmbeddedResource Include="kbypass.sys" /> -->
+
+</Project>
