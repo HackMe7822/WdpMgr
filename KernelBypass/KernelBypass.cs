@@ -237,7 +237,7 @@ static class Program {
         g_DevHandle = NM.CreateFile(@"\\.\KernelBypass", 0xC0000000/*RW*/,
             0, IntPtr.Zero, 3/*OPEN_EXISTING*/, 0, IntPtr.Zero);
         if (g_DevHandle == new IntPtr(-1)) {
-            Log("[ERROR] Cannot open \\.\KernelBypass: " + Marshal.GetLastWin32Error());
+            Log("[ERROR] Cannot open \\\\.\\KernelBypass: " + Marshal.GetLastWin32Error());
             g_DevHandle = IntPtr.Zero;
         } else {
             SendIoctl(KBypassIoctl.Activate);

@@ -6,6 +6,7 @@
     <AssemblyName>KernelBypass</AssemblyName>
     <RootNamespace>KernelBypass</RootNamespace>
     <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationManifest>app.manifest</ApplicationManifest>

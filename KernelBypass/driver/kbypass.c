@@ -19,7 +19,7 @@
  * Requires: test signing (bcdedit /set testsigning on) or production EV cert
  */
 
-#include <wdm.h>
+#include <ntifs.h>
 #include <ntimage.h>
 #include "kbypass.h"
 
@@ -35,7 +35,7 @@
 typedef struct _SYSTEM_PROCESS_INFO {
     ULONG NextEntryOffset;
     ULONG NumberOfThreads;
-    BYTE  Reserved1[48];
+    UCHAR Reserved1[48];
     UNICODE_STRING ImageName;
     LONG  BasePriority;
     HANDLE UniqueProcessId;
