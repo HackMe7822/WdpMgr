@@ -1150,6 +1150,11 @@ namespace WdpHook
             StartPosition   = FormStartPosition.CenterScreen;
             BackColor       = BG;
             Font            = new Font("Segoe UI", 9f);
+            try {
+                using (var s = System.Reflection.Assembly.GetExecutingAssembly()
+                    .GetManifestResourceStream("WdpHook.app.ico"))
+                    if (s != null) Icon = new Icon(s);
+            } catch { }
 
             Controls.Add(new Label {
                 Text     = "WdpHook manages display affinity and input policy without DLL injection.\r\n\r\n" +
