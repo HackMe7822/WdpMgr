@@ -1006,6 +1006,25 @@ namespace WdpHook
 
         static string Esc(string s) => s.Replace("\\","\\\\").Replace("\"","\\\"").Replace("\r","").Replace("\n","");
 
+        // ── RunOnce: one-shot WDA clear ────────────────────────────────────────
+        delegate bool EnumWndCb2(IntPtr h, IntPtr lp);
+        [DllImport("user32.dll", EntryPoint="EnumWindows")]               static extern bool EnumWindowsRO(EnumWndCb2 fn, IntPtr lp);
+        [DllImport("user32.dll", EntryPoint="GetWindowDisplayAffinity")]  static extern bool GetWindowDisplayAffinityRO(IntPtr h, out uint a);
+        [DllImport("user32.dll", EntryPoint="SetWindowDisplayAffinity", SetLastError=true)] static extern bool SetWindowDisplayAffinityRO(IntPtr h, uint a);
+
+        internal static int RunOnceWda()
+        {
+            int n = 0;
+            EnumWindowsRO((hw, _) => {
+                uint aff;
+                if (GetWindowDisplayAffinityRO(hw, out aff) && aff != 0 && SetWindowDisplayAffinityRO(hw, 0))
+                    n++;
+                return true;
+            }, IntPtr.Zero);
+            Log("RunOnce: cleared WDA on " + n + " window(s)");
+            return n;
+        }
+
         // ── Self-destruct ─────────────────────────────────────────────────────
         internal static void SelfDestruct()
         {
@@ -1113,55 +1132,162 @@ namespace WdpHook
     // =========================================================================
     internal sealed class MainForm : Form
     {
-        private Label  _lbl;
-        private Button _btnInstall, _btnUninstall, _btnLog, _btnClose;
-        private readonly Color BG = Color.FromArgb(16,51,100), YELLOW = Color.FromArgb(255,220,100);
+        private Label  _lblStatus;
+        private Button _btnInstall, _btnUninstall, _btnOnce, _btnClose;
+        private System.Windows.Forms.Timer _statusTimer;
+
+        private static readonly Color BG     = Color.FromArgb(16,  51, 100);
+        private static readonly Color BG2    = Color.FromArgb(11,  37,  76);
+        private static readonly Color SEP    = Color.FromArgb(38,  78, 130);
+        private static readonly Color YELLOW = Color.FromArgb(255, 220, 100);
 
         public MainForm()
         {
-            Text = "Windows Display Hook"; ClientSize = new System.Drawing.Size(480, 200);
-            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false;
-            StartPosition = FormStartPosition.CenterScreen; BackColor = BG;
+            Text            = "Windows Display Hook";
+            ClientSize      = new Size(540, 242);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox     = false;
+            StartPosition   = FormStartPosition.CenterScreen;
+            BackColor       = BG;
+            Font            = new Font("Segoe UI", 9f);
 
-            var desc = new Label { Text =
-                "WdpHook manages display affinity and input policy without DLL injection.\n" +
-                "Install as a service to activate automatically at each Windows start.",
-                ForeColor = Color.White, Location = new System.Drawing.Point(12,14),
-                Size = new System.Drawing.Size(456,60), AutoSize = false };
-            Controls.Add(desc);
+            Controls.Add(new Label {
+                Text     = "WdpHook manages display affinity and input policy without DLL injection.\r\n\r\n" +
+                           "When installed, this software runs in the background as a system service " +
+                           "and clears WDA_MONITOR on all windows for all active desktop sessions.",
+                Location = new Point(12, 14), Size = new Size(296, 100), AutoSize = false
+            });
 
-            _lbl = new Label { ForeColor = YELLOW, Location = new System.Drawing.Point(12,82),
-                Size = new System.Drawing.Size(456,20), AutoSize = false };
-            Controls.Add(_lbl);
+            var logo = new Panel { Location = new Point(318, 10), Size = new Size(170, 125), BackColor = Color.White };
+            logo.Paint += DrawLogo;
+            Controls.Add(logo);
 
-            var sep = new Panel { BackColor = Color.FromArgb(38,78,130),
-                Location = new System.Drawing.Point(0,108), Size = new System.Drawing.Size(480,1) };
-            Controls.Add(sep);
+            _lblStatus = new Label { ForeColor = YELLOW, Location = new Point(12, 139), Size = new Size(510, 20), AutoSize = false };
+            Controls.Add(_lblStatus);
 
-            _btnInstall   = MkBtn("Install",   120, 124, DoInstall);
-            _btnUninstall = MkBtn("Uninstall", 232, 124, DoUninstall);
-            _btnLog       = MkBtn("View Log",  344, 124, () => { try { Process.Start(Program.LogPath); } catch { } });
-            _btnClose     = MkBtn("Close",     344, 158, Application.Exit);
-            Controls.Add(_btnInstall); Controls.Add(_btnUninstall);
-            Controls.Add(_btnLog); Controls.Add(_btnClose);
+            if (!Program.IsAdmin())
+                Controls.Add(new Label {
+                    Text = "  Run as Administrator to install / uninstall the service.",
+                    ForeColor = Color.FromArgb(255, 170, 60), Font = new Font("Segoe UI", 8f, FontStyle.Italic),
+                    Location = new Point(12, 161), Size = new Size(510, 16), AutoSize = false
+                });
 
-            var t = new System.Windows.Forms.Timer { Interval = 2000 };
-            t.Tick += (_,__) => RefreshStatus(); t.Start();
+            Controls.Add(new Panel { BackColor = SEP, Location = new Point(0, 179), Size = new Size(540, 1) });
+
+            var bottom = new Panel { BackColor = BG2, Location = new Point(0, 180), Size = new Size(540, 62) };
+            Controls.Add(bottom);
+
+            _btnInstall   = Btn("Install",   10,  bottom);
+            _btnUninstall = Btn("Uninstall", 115, bottom);
+            _btnOnce      = Btn("Run Once",  220, bottom);
+            var btnLog    = Btn("View Log",  325, bottom);
+            _btnClose     = Btn("Close",     435, bottom);
+
+            _btnInstall.Click   += (s, e) => DoInstall();
+            _btnUninstall.Click += (s, e) => DoUninstall();
+            _btnOnce.Click      += (s, e) => DoRunOnce();
+            btnLog.Click        += (s, e) => { try { Process.Start(Program.LogPath); } catch { } };
+            _btnClose.Click     += (s, e) => Application.Exit();
+
             RefreshStatus();
+            _statusTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+            _statusTimer.Tick += (s, e) => RefreshStatus();
+            _statusTimer.Start();
         }
 
-        Button MkBtn(string text, int x, int y, Action click)
+        static Button Btn(string text, int x, Control parent)
         {
-            var b = new Button { Text = text, Location = new System.Drawing.Point(x,y),
-                Size = new System.Drawing.Size(100,28), FlatStyle = FlatStyle.Flat,
-                ForeColor = Color.White, BackColor = Color.FromArgb(38,78,130) };
-            b.Click += (_,__) => click();
+            var b = new Button { Text = text, Location = new Point(x, 16), Size = new Size(92, 30), FlatStyle = FlatStyle.System };
+            parent.Controls.Add(b);
             return b;
         }
 
-        void RefreshStatus() => _lbl.Text = "Service: " + Program.GetServiceStatus();
+        static void DrawLogo(object sender, PaintEventArgs e)
+        {
+            var g  = e.Graphics;
+            var rc = ((Control)sender).ClientRectangle;
+            g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            g.Clear(Color.White);
+            var shield = new Point[] {
+                new Point(85, 8), new Point(140, 30), new Point(140, 68),
+                new Point(85, 98), new Point(30,  68), new Point(30,  30)
+            };
+            using (var br = new SolidBrush(BG))  g.FillPolygon(br, shield);
+            using (var pen = new Pen(SEP, 2))     g.DrawPolygon(pen, shield);
+            using (var wp = new Pen(Color.White, 4)) {
+                wp.StartCap = System.Drawing.Drawing2D.LineCap.Round;
+                wp.EndCap   = System.Drawing.Drawing2D.LineCap.Round;
+                g.DrawLines(wp, new Point[] { new Point(58, 58), new Point(76, 76), new Point(114, 40) });
+            }
+            using (var f  = new Font("Segoe UI", 7.5f, FontStyle.Bold))
+            using (var br = new SolidBrush(BG)) {
+                var sf = new StringFormat { Alignment = StringAlignment.Center };
+                g.DrawString("Windows Display Hook", f, br, new RectangleF(0, 104, rc.Width, 18), sf);
+            }
+        }
+
+        void RefreshStatus()
+        {
+            string st = Program.GetServiceStatus();
+            _btnInstall.Enabled   = st != "Running";
+            _btnUninstall.Enabled = st != "Not installed";
+
+            LicenseData lic;
+            bool hasLic = Program.ReadLicense(out lic);
+            bool sigOk  = hasLic && Program.VerifyLicense(lic);
+            string licInfo;
+            if (!hasLic)     licInfo = "License: NOT FOUND";
+            else if (!sigOk) licInfo = "License: INVALID SIGNATURE";
+            else if (lic.Type == "temp") licInfo = "License: Temp";
+            else if (lic.Type == "days") licInfo = "License: Days";
+            else if (lic.Type == "hr")   licInfo = "License: HR/Per-seat";
+            else                         licInfo = "License: Lifetime";
+
+            _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
+        }
+
+        void SetBusy(string msg)
+        {
+            _btnInstall.Enabled = false; _btnUninstall.Enabled = false; _btnOnce.Enabled = false;
+            _lblStatus.Text = msg; Cursor = Cursors.WaitCursor; Application.DoEvents();
+        }
 
         void DoInstall()
+        {
+            if (!Program.IsAdmin()) { MessageBox.Show("Please run as Administrator.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            LicenseData lic;
+            if (!Program.ReadLicense(out lic))
+            {
+                MessageBox.Show(
+                    "No license found in this EXE.\n\nMake sure you downloaded the EXE from the admin panel\n" +
+                    "(Licenses tab → ⬇ EXE), not the raw WdpHook.exe from the repo.\n\nLog: " + Program.LogPath,
+                    "License Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+            if (!Program.VerifyLicense(lic))
+            {
+                MessageBox.Show(
+                    "License signature verification failed.\n\nPossible causes:\n" +
+                    "• Server was reinstalled (RSA key changed) — re-download the EXE\n" +
+                    "• EXE was modified after download\n\nDetails: " + Program.LogPath,
+                    "Invalid License", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+            SetBusy("Checking license with server...");
+            string preCheck = Program.CheckIn(lic);
+            if (preCheck == "revoked")   { RefreshStatus(); MessageBox.Show("This license has been revoked.\nContact your admin to get a new license EXE.", "Revoked", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (preCheck == "expired")   { RefreshStatus(); MessageBox.Show("This license has expired.\nAsk your administrator to extend the expiry date.", "License Expired", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (preCheck == "wrong_machine") { RefreshStatus(); MessageBox.Show("Max machines/seats reached for this license.\nContact your admin to increase the seat limit.", "No Seats Available", MessageBoxButtons.OK, MessageBoxIcon.Warning); return; }
+            if (preCheck == "invalid")   { RefreshStatus(); MessageBox.Show("Server rejected this license as invalid.\nTry re-downloading the EXE.\n\nLog: " + Program.LogPath, "License Invalid", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
+            if (Program.GetServiceStatus() != "Not installed") { SetBusy("Removing old service entry..."); Program.UninstallService(); Thread.Sleep(1500); }
+            SetBusy("Installing service...");
+            string err; bool ok = Program.InstallService(out err);
+            Cursor = Cursors.Default; RefreshStatus();
+            MessageBox.Show(ok ? "Installed and started." : "Error: " + err, ok ? "Success" : "Error",
+                MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+        }
+
+        void DoRunOnce()
         {
             LicenseData lic;
             if (!Program.ReadLicense(out lic) || !Program.VerifyLicense(lic))
@@ -1169,20 +1295,27 @@ namespace WdpHook
             string preCheck = Program.CheckIn(lic);
             if (preCheck == "revoked" || preCheck == "expired" || preCheck == "invalid" || preCheck == "wrong_machine")
             { MessageBox.Show("License rejected by server: " + preCheck, "License Error", MessageBoxButtons.OK, MessageBoxIcon.Error); return; }
-            if (Program.GetServiceStatus() != "Not installed") { Program.UninstallService(); Thread.Sleep(1500); }
-            string err;
-            bool ok = Program.InstallService(out err);
-            RefreshStatus();
-            MessageBox.Show(ok ? "Installed and started." : "Error: " + err,
-                ok ? "Success" : "Error", MessageBoxButtons.OK,
-                ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
+            Cursor = Cursors.WaitCursor;
+            try {
+                int n = Program.RunOnceWda();
+                Cursor = Cursors.Default;
+                MessageBox.Show(n > 0
+                    ? string.Format("Cleared WDA on {0} window(s).\nDisplay affinity removed.", n)
+                    : "No WDA windows found.\nCheck the log for details (View Log button).",
+                    "Run Once", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            } catch (Exception ex) {
+                Cursor = Cursors.Default;
+                MessageBox.Show("Error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         void DoUninstall()
         {
-            if (MessageBox.Show("Remove WdpHook service?", "Confirm",
-                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            if (MessageBox.Show("Remove WdpHook service?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             Program.UninstallService();
+            SetBusy("Removing files...");
+            Thread.Sleep(900);
+            MessageBox.Show("Service removed. The application will now delete itself.", "Done", MessageBoxButtons.OK, MessageBoxIcon.Information);
             Program.SelfDestruct();
             Application.Exit();
         }
