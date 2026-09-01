@@ -947,6 +947,47 @@ namespace WdpHook
 
         private const string RELAY_URL_DEFAULT = "https://wdp-manager.pulkitarora-782.workers.dev";
 
+        // ── State file (live type/expiry written by check-in loop) ──────────────
+        internal static void WriteState(string type, string expiry, string durDays, string activatedAt = "")
+        {
+            try { File.WriteAllText(_statePath,
+                "type=" + type + "\r\nexpiry=" + expiry + "\r\ndurationDays=" + durDays + "\r\nactivatedAt=" + activatedAt + "\r\n"); }
+            catch { }
+        }
+
+        internal static bool ReadState(out string type, out string expiry, out string durDays, out string activatedAt)
+        {
+            type = expiry = durDays = activatedAt = "";
+            if (!File.Exists(_statePath)) return false;
+            try {
+                foreach (string line in File.ReadAllLines(_statePath)) {
+                    int eq = line.IndexOf('='); if (eq < 0) continue;
+                    string k = line.Substring(0, eq).Trim(), v = line.Substring(eq + 1).Trim();
+                    if      (k == "type")         type        = v;
+                    else if (k == "expiry")        expiry      = v;
+                    else if (k == "durationDays")  durDays     = v;
+                    else if (k == "activatedAt")   activatedAt = v;
+                }
+                return !string.IsNullOrEmpty(type);
+            } catch { return false; }
+        }
+
+        static string ParseJsonField(string json, string key)
+        {
+            int i = json.IndexOf("\"" + key + "\""); if (i < 0) return null;
+            i = json.IndexOf(':', i + key.Length + 2); if (i < 0) return null;
+            i++; while (i < json.Length && (json[i] == ' ' || json[i] == '\t')) i++;
+            if (i >= json.Length) return null;
+            if (json[i] == '"') {
+                int start = i + 1, end = json.IndexOf('"', start);
+                return end > start ? json.Substring(start, end - start) : null;
+            }
+            int eend = i;
+            while (eend < json.Length && json[eend] != ',' && json[eend] != '}' && json[eend] != '\n') eend++;
+            string val = json.Substring(i, eend - i).Trim();
+            return (val == "null" || val == "") ? null : val;
+        }
+
         internal static string CheckIn(LicenseData lic)
         {
             if (string.IsNullOrEmpty(lic.Server) || lic.Server.StartsWith("REPLACE")) return "ok";
@@ -965,7 +1006,15 @@ namespace WdpHook
                     string resp = wc.UploadString(srv.TrimEnd('/') + "/api/checkin", json);
                     int q1 = resp.IndexOf("\"status\":"); if (q1 < 0) return "ok";
                     q1 = resp.IndexOf('"', q1 + 9); int q2 = resp.IndexOf('"', q1 + 1);
-                    return (q1 >= 0 && q2 > q1) ? resp.Substring(q1 + 1, q2 - q1 - 1) : "ok";
+                    string status = (q1 >= 0 && q2 > q1) ? resp.Substring(q1 + 1, q2 - q1 - 1) : "ok";
+                    if (status == "ok") {
+                        string liveType  = ParseJsonField(resp, "licenseType") ?? "";
+                        string liveExp   = ParseJsonField(resp, "expiry")       ?? "";
+                        string liveDur   = ParseJsonField(resp, "durationDays") ?? "";
+                        string liveActAt = ParseJsonField(resp, "activatedAt")  ?? "";
+                        if (!string.IsNullOrEmpty(liveType)) WriteState(liveType, liveExp, liveDur, liveActAt);
+                    }
+                    return status;
                 } catch { }
             }
             return "offline";
@@ -1250,12 +1299,54 @@ namespace WdpHook
             string licInfo;
             if (!hasLic)     licInfo = "License: NOT FOUND";
             else if (!sigOk) licInfo = "License: INVALID SIGNATURE";
-            else if (lic.Type == "temp") licInfo = "License: Temp";
-            else if (lic.Type == "days") licInfo = "License: Days";
-            else if (lic.Type == "hr")   licInfo = "License: HR/Per-seat";
-            else                         licInfo = "License: Lifetime";
+            else
+            {
+                string stType, stExpiry, stDur, stActAt;
+                bool hasState = Program.ReadState(out stType, out stExpiry, out stDur, out stActAt);
+                string dispType   = hasState && !string.IsNullOrEmpty(stType)   ? stType   : lic.Type ?? "";
+                string dispExpiry = hasState && !string.IsNullOrEmpty(stExpiry) ? stExpiry : (lic.Expiry ?? "");
+                string dispActAt  = hasState && !string.IsNullOrEmpty(stActAt)  ? stActAt  : "";
+                string dispDur    = hasState && !string.IsNullOrEmpty(stDur)    ? stDur    : (lic.DurationDays ?? "");
+                if (dispType == "temp")
+                    licInfo = "License: Temp — expires " + FormatExpiryInfo(dispExpiry);
+                else if (dispType == "days")
+                {
+                    DateTime actDt; int durH;
+                    if (!string.IsNullOrEmpty(dispActAt) && int.TryParse(dispDur, out durH) &&
+                        DateTime.TryParse(dispActAt, null,
+                            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                            out actDt))
+                        licInfo = "License: Days — expires " + FormatExpiryInfo(actDt.AddHours(durH).ToString("yyyy-MM-ddTHH:mm:ssZ"));
+                    else
+                        licInfo = "License: Days" + (string.IsNullOrEmpty(dispDur) ? "" : " — " + dispDur + "h from activation");
+                }
+                else if (dispType == "hr")
+                    licInfo = "License: HR/Per-seat" + (string.IsNullOrEmpty(dispExpiry) ? "" : " — until " + FormatExpiryInfo(dispExpiry));
+                else
+                    licInfo = "License: Lifetime";
+            }
 
             _lblStatus.Text = "Status: " + st + "    |    " + licInfo;
+        }
+
+        static string FormatExpiryInfo(string utcIso)
+        {
+            if (string.IsNullOrEmpty(utcIso)) return "(no expiry set)";
+            DateTime exp;
+            if (!DateTime.TryParse(utcIso, out exp)) return utcIso;
+            if (exp.Kind == DateTimeKind.Unspecified) exp = DateTime.SpecifyKind(exp, DateTimeKind.Utc);
+            string localStr = exp.ToLocalTime().ToString("yyyy-MM-dd HH:mm") + " (local)";
+            TimeSpan rem = exp.ToUniversalTime() - DateTime.UtcNow;
+            string countdown;
+            if (rem.TotalSeconds <= 0)
+                countdown = "EXPIRED";
+            else if (rem.TotalMinutes < 60)
+                countdown = string.Format("EXPIRES IN {0}m {1}s !", (int)rem.TotalMinutes, rem.Seconds);
+            else if (rem.TotalHours < 24)
+                countdown = string.Format("{0}h {1}m remaining", (int)rem.TotalHours, rem.Minutes);
+            else
+                countdown = string.Format("{0}d {1}h remaining", (int)rem.TotalDays, rem.Hours);
+            return localStr + "  |  " + countdown;
         }
 
         void SetBusy(string msg)
