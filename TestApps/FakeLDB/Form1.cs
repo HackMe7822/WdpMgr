@@ -139,7 +139,7 @@ namespace FakeLDB
 
             _tick=new System.Windows.Forms.Timer{Interval=1000};
             _tick.Tick+=(s,e)=>{ _tickCount++; _lblTick.Text="TICK: "+_tickCount; RefreshWda(); RefreshMit(); };
-            if (mode>=3 && mode!=6) {
+            if (mode>=3) {
                 _reapply=new System.Windows.Forms.Timer{Interval=200};
                 _reapply.Tick+=(s,e)=>{ SetWindowDisplayAffinity(Handle,1); _reapplyCount++; };
             }
@@ -151,7 +151,7 @@ namespace FakeLDB
             }
             Load+=(s,e)=>{
                 ApplyMitigations();
-                if (mode!=6) SetWindowDisplayAffinity(Handle,1);
+                SetWindowDisplayAffinity(Handle,1);
                 RefreshWda(); RefreshMit();
                 _tick.Start(); _reapply?.Start();
                 if (mode==4) new Thread(WatcherLoop){IsBackground=true}.Start();
@@ -316,14 +316,6 @@ namespace FakeLDB
         // ── UI ────────────────────────────────────────────────────────────────
         internal void RefreshWda()
         {
-            if (_mode==6) {
-                bool helperRunning = _m6Proc!=null && !_m6Proc.HasExited;
-                _lblWda.Text = helperRunning
-                    ? "Helper window: WDA_MONITOR (BLACK in capture) — re-applied every 10ms"
-                    : "Helper not running";
-                _lblWda.ForeColor = helperRunning ? Color.Tomato : Color.Gray;
-                return;
-            }
             GetWindowDisplayAffinity(Handle,out uint aff);
             bool clear=aff==0;
             string s="WDA=0x"+aff.ToString("X");
@@ -339,7 +331,10 @@ namespace FakeLDB
             if (_mode>=3 && _mode!=6) s+=" | MicrosoftSignedOnly";
             if (_mode==4) s+=" | ThreadWatcher(poll) killed="+_m4Killed;
             if (_mode==5) s+=" | RUTS hook — killed="+_m5Killed+" shellcode thread(s)";
-            if (_mode==6) s=" Mode 6 protections run in native subprocess (ACG incompatible with .NET CLR JIT)";
+            if (_mode==6) {
+                bool hr = _m6Proc!=null && !_m6Proc.HasExited;
+                s+=" | Helper PID="+(hr?_m6HelperPid.ToString():"not running")+" ACG+MicrosoftSigned+ExtPtDisable+WDA(10ms)";
+            }
             _lblMit.Text=s;
         }
         static string ModeName(int m){
