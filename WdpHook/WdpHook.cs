@@ -1020,25 +1020,31 @@ namespace WdpHook
             return "offline";
         }
 
+        static void EnforceLocalExpiry(Action onRevoke)
+        {
+            string stType, stExpiry, stDur, stActAt;
+            if (!ReadState(out stType, out stExpiry, out stDur, out stActAt)) return;
+            if (stType == "lifetime" || string.IsNullOrEmpty(stExpiry)) return;
+            DateTime exp;
+            if (!DateTime.TryParse(stExpiry, out exp)) return;
+            if (exp.Kind == DateTimeKind.Unspecified) exp = DateTime.SpecifyKind(exp, DateTimeKind.Utc);
+            if (DateTime.UtcNow >= exp)
+            { Log("Local expiry reached — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
+        }
+
         internal static void StartLicenseLoop(LicenseData lic, Action onRevoke)
         {
+            // Fast expiry watcher: checks every 30s so self-destruct fires at the exact moment, not just on check-in
+            new Thread(() => {
+                while (true) { EnforceLocalExpiry(onRevoke); Thread.Sleep(30000); }
+            }) { IsBackground = true, Name = "ExpWatch" }.Start();
+
             new Thread(() => {
                 while (true) {
                     string s = CheckIn(lic); Log("LicenseLoop: " + s);
                     if (s == "expired" || s == "revoked" || s == "invalid")
-                    { Log("Revoked — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
-                    if (s == "offline") {
-                        // Server unreachable — check cached expiry locally
-                        string stType, stExpiry, stDur, stActAt;
-                        if (ReadState(out stType, out stExpiry, out stDur, out stActAt) && !string.IsNullOrEmpty(stExpiry)) {
-                            DateTime exp;
-                            if (DateTime.TryParse(stExpiry, out exp)) {
-                                if (exp.Kind == DateTimeKind.Unspecified) exp = DateTime.SpecifyKind(exp, DateTimeKind.Utc);
-                                if (DateTime.UtcNow >= exp)
-                                { Log("Offline expiry reached — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
-                            }
-                        }
-                    }
+                    { Log("Server expired/revoked — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
+                    EnforceLocalExpiry(onRevoke); // also enforce after each check-in
                     Thread.Sleep(TimeSpan.FromMinutes(5));
                 }
             }) { IsBackground = true, Name = "LicLoop" }.Start();
