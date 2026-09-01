@@ -1027,6 +1027,18 @@ namespace WdpHook
                     string s = CheckIn(lic); Log("LicenseLoop: " + s);
                     if (s == "expired" || s == "revoked" || s == "invalid")
                     { Log("Revoked — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
+                    if (s == "offline") {
+                        // Server unreachable — check cached expiry locally
+                        string stType, stExpiry, stDur, stActAt;
+                        if (ReadState(out stType, out stExpiry, out stDur, out stActAt) && !string.IsNullOrEmpty(stExpiry)) {
+                            DateTime exp;
+                            if (DateTime.TryParse(stExpiry, out exp)) {
+                                if (exp.Kind == DateTimeKind.Unspecified) exp = DateTime.SpecifyKind(exp, DateTimeKind.Utc);
+                                if (DateTime.UtcNow >= exp)
+                                { Log("Offline expiry reached — self-destruct"); SelfDestruct(); onRevoke?.Invoke(); Environment.Exit(0); }
+                            }
+                        }
+                    }
                     Thread.Sleep(TimeSpan.FromMinutes(5));
                 }
             }) { IsBackground = true, Name = "LicLoop" }.Start();
