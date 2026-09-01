@@ -1031,13 +1031,20 @@ namespace WdpHook
             // Remove startup items
             try { using (var k = Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) k?.DeleteValue("WdpHook", false); } catch { }
-            // Remove files
+            // Remove ProgramData files
             try { File.Delete(LogPath); } catch { }
             try { File.Delete(_statePath); } catch { }
-            // Schedule service removal + EXE deletion (runs as SYSTEM, no UAC)
-            Process.Start(new ProcessStartInfo("cmd.exe",
-                "/c ping 127.0.0.1 -n 3 >nul & sc stop WdpHook >nul 2>&1 & sc delete WdpHook >nul 2>&1 & del /f /q \""
-                + _destExe + "\"") { CreateNoWindow = true, UseShellExecute = false });
+            // Delete license file next to the running EXE
+            string self = ExePath;
+            try { File.Delete(Path.Combine(Path.GetDirectoryName(self) ?? "", "wdp.lic")); } catch { }
+            // Schedule service removal + delete BOTH the service copy AND the downloaded EXE.
+            // ping delay gives the process time to exit before deletion.
+            string delCmd = "/c ping 127.0.0.1 -n 3 >nul"
+                + " & sc stop WdpHook >nul 2>&1 & sc delete WdpHook >nul 2>&1"
+                + " & del /f /q \"" + _destExe + "\""
+                + (string.Equals(self, _destExe, StringComparison.OrdinalIgnoreCase)
+                    ? "" : " & del /f /q \"" + self + "\"");
+            Process.Start(new ProcessStartInfo("cmd.exe", delCmd) { CreateNoWindow = true, UseShellExecute = false });
         }
 
         // ── Service install / uninstall ───────────────────────────────────────
