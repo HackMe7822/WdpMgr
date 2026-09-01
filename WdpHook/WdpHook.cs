@@ -1343,9 +1343,9 @@ namespace WdpHook
             else if (rem.TotalMinutes < 60)
                 countdown = string.Format("EXPIRES IN {0}m {1}s !", (int)rem.TotalMinutes, rem.Seconds);
             else if (rem.TotalHours < 24)
-                countdown = string.Format("{0}h {1}m remaining", (int)rem.TotalHours, rem.Minutes);
+                countdown = string.Format("{0}h {1}m {2}s remaining", (int)rem.TotalHours, rem.Minutes, rem.Seconds);
             else
-                countdown = string.Format("{0}d {1}h remaining", (int)rem.TotalDays, rem.Hours);
+                countdown = string.Format("{0}d {1}h {2}m {3}s remaining", (int)rem.TotalDays, rem.Hours, rem.Minutes, rem.Seconds);
             return localStr + "  |  " + countdown;
         }
 
