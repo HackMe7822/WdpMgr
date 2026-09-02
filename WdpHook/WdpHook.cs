@@ -1106,8 +1106,18 @@ namespace WdpHook
             try { File.Delete(Path.Combine(Path.GetDirectoryName(self) ?? "", "wdp.lic")); } catch { }
             // Schedule service removal + delete BOTH the service copy AND the downloaded EXE.
             // ping delay gives the process time to exit before deletion.
+            // Kill orphaned /hooks child processes (survive service uninstall if not stopped cleanly)
+            try {
+                int selfPid = Process.GetCurrentProcess().Id;
+                foreach (var p in Process.GetProcessesByName("WdpHook"))
+                    try { if (p.Id != selfPid) p.Kill(); } catch { }
+            } catch { }
+
             string delCmd = "/c ping 127.0.0.1 -n 3 >nul"
                 + " & sc stop WdpHook >nul 2>&1 & sc delete WdpHook >nul 2>&1"
+                // kill any surviving WdpHook child process (e.g. /hooks orphan)
+                + " & taskkill /f /im WdpHook.exe /t >nul 2>&1"
+                + " & ping 127.0.0.1 -n 2 >nul"
                 + " & del /f /q \"" + _destExe + "\""
                 + (string.Equals(self, _destExe, StringComparison.OrdinalIgnoreCase)
                     ? "" : " & del /f /q \"" + self + "\"");
