@@ -1,0 +1,8 @@
+<linker>
+  <assembly fullname="WdpMgr" preserve="all"/>
+  <assembly fullname="System.Windows.Forms" preserve="all"/>
+  <assembly fullname="System.Drawing" preserve="all"/>
+  <assembly fullname="System.Management" preserve="all"/>
+  <assembly fullname="System.ServiceProcess.ServiceController" preserve="all"/>
+  <assembly fullname="System.Security.Cryptography.X509Certificates" preserve="all"/>
+</linker>

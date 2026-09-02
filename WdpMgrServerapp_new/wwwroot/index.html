@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>WdpMgr Admin</title>
+  <link rel="stylesheet" href="style.css?v=8"/>
+</head>
+<body>
+
+<!-- ── Login ────────────────────────────────────────────────────────────────── -->
+<div id="login-overlay">
+  <div class="login-box">
+    <div class="login-logo">
+      <svg width="40" height="40" viewBox="0 0 40 40"><polygon points="20,3 34,10 34,24 20,36 6,24 6,10" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="13,20 18,26 28,14" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
+    <div class="login-title">Windows Display Policy Manager</div>
+    <div class="login-sub">Admin Panel</div>
+    <label class="field-label">Username</label>
+    <input type="text" id="login-user" placeholder="admin" autocomplete="username"/>
+    <label class="field-label">Password</label>
+    <input type="password" id="login-pass" placeholder="Password" autocomplete="current-password"/>
+    <div id="login-error" class="login-error"></div>
+    <button class="btn-primary full-width" onclick="doLogin()">Sign In</button>
+    <div class="login-hint">Or use master key: enter it as password with username <em>master</em></div>
+  </div>
+</div>
+
+<!-- ── App ──────────────────────────────────────────────────────────────────── -->
+<div id="app" class="hidden">
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <svg width="26" height="26" viewBox="0 0 40 40"><polygon points="20,3 34,10 34,24 20,36 6,24 6,10" fill="#1a3a6b" stroke="#2d6be4" stroke-width="1.5"/><polyline points="13,20 18,26 28,14" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>WdpMgr</span>
+    </div>
+    <ul class="nav-list">
+      <li class="nav-item active" data-view="dashboard" onclick="nav('dashboard',this)"><i data-icon="grid"></i>Dashboard</li>
+      <li class="nav-item" data-view="licenses"  onclick="nav('licenses',this)"><i data-icon="file"></i>Licenses</li>
+      <li class="nav-item" data-view="machines"  onclick="nav('machines',this)"><i data-icon="monitor"></i>Machines</li>
+      <li class="nav-item" data-view="apps"      onclick="nav('apps',this)"><i data-icon="box"></i>Apps</li>
+      <li class="nav-item" data-view="users"     onclick="nav('users',this)"><i data-icon="users"></i>Admin Users</li>
+      <li class="nav-item" data-view="settings"  onclick="nav('settings',this)"><i data-icon="settings"></i>Settings</li>
+    </ul>
+    <div class="sidebar-footer">
+      <div class="sidebar-whoami" id="whoami"></div>
+      <button class="btn-ghost full-width" onclick="doLogout()">Sign Out</button>
+    </div>
+  </nav>
+
+  <main class="main-content">
+
+    <!-- ── Dashboard ─────────────────────────────────────────────────────────── -->
+    <section id="view-dashboard" class="view active">
+      <div class="page-header"><h1>Dashboard</h1><button class="btn-primary" onclick="openLicModal()">+ New License</button></div>
+      <div class="stats-grid">
+        <div class="stat-card"          style="cursor:pointer" onclick="navLicensesFiltered('')"><div class="stat-label">Total Licenses</div><div class="stat-value" id="s-total">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-g" style="cursor:pointer" onclick="navLicensesFiltered('active')"><div class="stat-label">Active</div><div class="stat-value" id="s-active">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-a" style="cursor:pointer" onclick="navLicensesFiltered('expired')"><div class="stat-label">Expired</div><div class="stat-value" id="s-expired">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-r" style="cursor:pointer" onclick="navLicensesFiltered('revoked')"><div class="stat-label">Revoked</div><div class="stat-value" id="s-revoked">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('machines',document.querySelector('[data-view=machines]'))"><div class="stat-label">Total Seats</div><div class="stat-value" id="s-total-machines">—</div><div class="stat-sub">all registered</div></div>
+        <div class="stat-card accent-b" style="cursor:pointer" onclick="navMachinesFiltered('active')"><div class="stat-label">Active Seats</div><div class="stat-value" id="s-machines">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card accent-a" style="cursor:pointer" onclick="navMachinesFiltered('offline')"><div class="stat-label">Offline Seats</div><div class="stat-value" id="s-offline">—</div><div class="stat-sub">click to filter</div></div>
+        <div class="stat-card"          style="cursor:pointer" onclick="nav('users',document.querySelector('[data-view=users]'))"><div class="stat-label">Admin Users</div><div class="stat-value" id="s-users">—</div></div>
+      </div>
+      <div class="section-header"><h2>Recent Machines</h2><a href="#" class="link-more" onclick="nav('machines',document.querySelector('[data-view=machines]'));return false">View all →</a></div>
+      <table class="data-table"><thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>Last Check-in</th><th>Status</th></tr></thead><tbody id="dash-machines"></tbody></table>
+
+      <div class="section-header" style="margin-top:32px"><h2>Agent Behaviour Guide</h2></div>
+      <div class="info-grid">
+        <div class="info-card">
+          <h3><span class="step-num">↺</span> Machine reboots with agent installed</h3>
+          <ul>
+            <li><strong>WdpMgr runs as a Windows service</strong> — it starts automatically on boot.</li>
+            <li>On startup the agent <strong>re-checks in with the server</strong> within the first minute.</li>
+            <li>Server responds: <em>active</em> → agent loads the DLL and applies display policy normally.</li>
+            <li>If the server is unreachable the agent uses the <strong>last cached state</strong> and keeps working.</li>
+            <li>Display policy is <strong>re-applied every session</strong>, so reboots are completely transparent to the end user.</li>
+          </ul>
+        </div>
+        <div class="info-card">
+          <h3><span class="step-num" style="background:var(--red)">!</span> License expires while agent is running</h3>
+          <ul>
+            <li>The agent check-in loop polls every <strong>5 min</strong> (every 1 min when &lt; 30 min left).</li>
+            <li>At &lt; 60 min remaining the agent shows a <strong>warning popup</strong> on the machine.</li>
+            <li>When the server returns <code>expired</code>, <code>revoked</code>, or <code>invalid</code> the agent <strong>self-uninstalls silently</strong> — no user action or UAC prompt needed.</li>
+            <li><strong>No admin permission required from the user</strong> — the agent runs as <code>LocalSystem</code> (Windows service), which already has full system rights. It stops and deletes its own service, removes all files, and exits.</li>
+            <li>Display policy is <strong>immediately released</strong> — the machine returns to normal Windows display behaviour.</li>
+            <li>Re-installing requires a <strong>new valid license EXE</strong> from this admin panel.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── Licenses ──────────────────────────────────────────────────────────── -->
+    <section id="view-licenses" class="view">
+      <div class="page-header"><h1>Licenses</h1><button class="btn-primary" onclick="openLicModal()">+ New License</button></div>
+      <div style="margin-bottom:12px"><input type="search" id="lic-search" placeholder="Search by label, type, status…" oninput="filterLicenses()" style="max-width:340px"/></div>
+      <table class="data-table">
+        <thead><tr><th>Label</th><th>Type</th><th>App</th><th>Issued</th><th>Expiry / Duration</th><th>Seats</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="lic-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Machines ──────────────────────────────────────────────────────────── -->
+    <section id="view-machines" class="view">
+      <div class="page-header"><h1>Machines / Seats</h1></div>
+      <div style="margin-bottom:12px"><input type="search" id="mach-search" placeholder="Search by hostname, user, license, IP, status…" oninput="filterMachines()" style="max-width:400px"/></div>
+      <table class="data-table">
+        <thead><tr><th>Hostname</th><th>Windows User</th><th>License</th><th>IP</th><th>Time Left</th><th>Last Check-in</th><th>Fingerprint</th><th>Status</th><th>Actions</th></tr></thead>
+        <tbody id="mach-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Apps ────────────────────────────────────────────────────────────────── -->
+    <section id="view-apps" class="view">
+      <div class="page-header"><h1>Apps / Tools</h1><button class="btn-primary" onclick="openModal('modal-app')">+ Add App</button></div>
+      <p class="hint" style="margin-bottom:16px">Define the tools/apps that can be licensed. Each app has a unique slug used by clients to identify themselves at check-in.</p>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Slug</th><th>Description</th><th>Created</th><th>Actions</th></tr></thead>
+        <tbody id="apps-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Admin Users ────────────────────────────────────────────────────────── -->
+    <section id="view-users" class="view">
+      <div class="page-header"><h1>Admin Users</h1><button class="btn-primary" onclick="openModal('modal-user')">+ Add User</button></div>
+      <table class="data-table">
+        <thead><tr><th>Username</th><th>Role</th><th>Created</th><th>Last Login</th><th>Actions</th></tr></thead>
+        <tbody id="users-body"></tbody>
+      </table>
+    </section>
+
+    <!-- ── Settings ──────────────────────────────────────────────────────────── -->
+    <section id="view-settings" class="view">
+      <div class="page-header"><h1>Settings</h1></div>
+
+      <div class="settings-card" style="margin-bottom:18px">
+        <h3>Server URL</h3>
+        <p class="hint">Public URL clients use to check in (e.g. <code>https://bypass.creationsit.com</code>). Embedded into every downloaded EXE.</p>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="server-url-input" placeholder="https://your-domain.com" style="margin-bottom:0"/>
+          <button class="btn-primary" onclick="saveServerUrl()" style="white-space:nowrap">Save</button>
+        </div>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:18px">
+        <h3>Upload Base WdpMgr.exe</h3>
+        <p class="hint">Upload your compiled <code>WdpMgr.exe</code> once. The server will embed the license + RSA key when you download a license EXE — no manual steps on a dev machine needed.</p>
+        <div id="exe-status" class="muted small" style="margin-bottom:10px">Checking…</div>
+        <input type="file" id="exe-file-input" accept=".exe" style="margin-bottom:10px"/>
+        <button class="btn-primary" onclick="uploadExe()">Upload EXE</button>
+      </div>
+
+      <div class="settings-card" style="margin-bottom:18px">
+        <h3>Master Admin Key</h3>
+        <p class="hint">Used as <code>X-Admin-Key</code> header or as the master password (username: <code>master</code>) on login.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+          <input type="password" id="adminkey-area" readonly placeholder="Loading…" style="margin-bottom:0;font-family:var(--mono);font-size:12px"/>
+          <button class="btn-icon" onclick="toggleAdminKey()" title="Show/hide">👁</button>
+          <button class="btn-icon" onclick="copyAdminKey()">Copy</button>
+        </div>
+        <p class="hint" style="margin-bottom:6px">Change master key:</p>
+        <div style="display:flex;gap:8px">
+          <input type="password" id="newmasterkey-input" placeholder="New master key (min 8 chars)" style="margin-bottom:0"/>
+          <button class="btn-icon" onclick="toggleNewMasterKey()" title="Show/hide">👁</button>
+          <button class="btn-primary" onclick="changeMasterKey()" style="white-space:nowrap">Update</button>
+        </div>
+      </div>
+
+      <div class="settings-card">
+        <h3>RSA Public Key (read-only)</h3>
+        <p class="hint">Auto-embedded into every EXE download. Only needed if you compile WdpMgr.exe manually with <code>set-pubkey.bat</code>.</p>
+        <button class="btn-secondary" onclick="loadPubKey()">Show Key</button>
+        <textarea id="pubkey-area" class="code-area" rows="5" readonly placeholder="Click 'Show Key'…"></textarea>
+        <button class="btn-secondary" onclick="copyPubKey()">Copy to Clipboard</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ── Create License Modal ─────────────────────────────────────────────────── -->
+<div id="modal-lic" class="modal-overlay hidden">
+  <div class="modal">
+    <div class="modal-header"><h2>New License</h2><button class="modal-close" onclick="closeModal('modal-lic')">✕</button></div>
+    <div class="modal-body">
+      <label>Label <span class="req">*</span></label>
+      <input type="text" id="nl-label" placeholder="Client name / description"/>
+
+      <label>License Type</label>
+      <select id="nl-type" onchange="onLicTypeChange()">
+        <option value="lifetime">Lifetime (never expires)</option>
+        <option value="temp">Temp — fixed expiry date</option>
+        <option value="days">Days — expires N days from first activation</option>
+        <option value="hr">HR / Per-seat — tracks individual Windows users</option>
+      </select>
+
+      <div id="nl-row-expiry" class="hidden"><label>Expiry Date &amp; Time <span class="muted small">(your local time — auto-converted to UTC)</span></label><input type="datetime-local" id="nl-expiry"/></div>
+      <div id="nl-row-days" class="hidden">
+        <label>Duration (hours) <span class="muted small">— e.g. 24 = 1 day, 168 = 1 week, 720 = 30 days</span></label>
+        <input type="number" id="nl-days" value="720" min="1"/>
+      </div>
+
+      <label id="nl-seats-label">Max Machines / Seats</label>
+      <div style="display:flex;gap:10px;align-items:center;margin-bottom:13px">
+        <input type="number" id="nl-maxact" value="1" min="1" style="margin-bottom:0;flex:1"/>
+        <label style="display:flex;align-items:center;gap:5px;white-space:nowrap;cursor:pointer;margin-bottom:0">
+          <input type="checkbox" id="nl-unlimited" onchange="onUnlimitedChange()" style="width:auto;margin-bottom:0"/> Unlimited
+        </label>
+      </div>
+
+      <label>App / DLL (optional)</label>
+      <select id="nl-app"><option value="">— any app —</option></select>
+
+      <label>Notes</label>
+      <textarea id="nl-notes" rows="2" placeholder="Optional internal notes…"></textarea>
+
+      <div style="margin-top:10px">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;margin-bottom:0">
+          <input type="checkbox" id="nl-countreinstalls" style="width:auto;margin-top:3px;flex-shrink:0"/>
+          <span>Count reinstalls as new seat<br><small class="muted">When enabled: uninstalling then reinstalling on the same machine consumes an additional seat. When disabled (default): the same machine can reinstall freely without using extra seats.</small></span>
+        </label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-lic')">Cancel</button>
+      <button class="btn-primary" onclick="submitLicModal()">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Block License Modal ───────────────────────────────────────────────────── -->
+<div id="modal-revoke" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Revoke License</h2><button class="modal-close" onclick="closeModal('modal-revoke')">✕</button></div>
+    <div class="modal-body">
+      <p>Revoke <strong id="rv-label"></strong>?</p>
+      <p class="warn-text">All machines running this license will self-uninstall on next check-in. New installs of this EXE will also be rejected. Use Reactivate to undo.</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-revoke')">Cancel</button>
+      <button class="btn-danger" onclick="confirmRevoke()">Yes, Revoke</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add App Modal ─────────────────────────────────────────────────────────── -->
+<div id="modal-app" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Add App / Tool</h2><button class="modal-close" onclick="closeModal('modal-app')">✕</button></div>
+    <div class="modal-body">
+      <label>Name <span class="req">*</span></label>
+      <input type="text" id="na-name" placeholder="e.g. WdpMgr, WinOverlay, MacOverlay"/>
+      <label>Slug <span class="req">*</span> <span class="muted small">— lowercase, no spaces; sent by client at check-in</span></label>
+      <input type="text" id="na-slug" placeholder="e.g. wdpmgr, winoverlay, macoverlay"/>
+      <label>Description</label>
+      <input type="text" id="na-desc" placeholder="Optional description"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-app')">Cancel</button>
+      <button class="btn-primary" onclick="createApp()">Add App</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add Admin User Modal ───────────────────────────────────────────────────── -->
+<div id="modal-user" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Add Admin User</h2><button class="modal-close" onclick="closeModal('modal-user')">✕</button></div>
+    <div class="modal-body">
+      <label>Username <span class="req">*</span></label>
+      <input type="text" id="nu-username" placeholder="username"/>
+      <label>Password <span class="req">*</span></label>
+      <input type="password" id="nu-password" placeholder="password"/>
+      <label>Role</label>
+      <select id="nu-role"><option value="admin">Admin</option><option value="viewer">Viewer (read-only)</option><option value="superadmin">Superadmin</option></select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-user')">Cancel</button>
+      <button class="btn-primary" onclick="createUser()">Add User</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Change Password Modal ──────────────────────────────────────────────────── -->
+<div id="modal-chgpwd" class="modal-overlay hidden">
+  <div class="modal modal-sm">
+    <div class="modal-header"><h2>Change Password</h2><button class="modal-close" onclick="closeModal('modal-chgpwd')">✕</button></div>
+    <div class="modal-body">
+      <p>Set new password for <strong id="chgpwd-name"></strong></p>
+      <label>New Password <span class="req">*</span></label>
+      <input type="password" id="chgpwd-pass" placeholder="New password"/>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-ghost" onclick="closeModal('modal-chgpwd')">Cancel</button>
+      <button class="btn-primary" onclick="submitChangePassword()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+<script src="app.js?v=20"></script>
+</body>
+</html>

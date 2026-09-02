@@ -153,46 +153,32 @@ static BOOL CALLBACK ClearCb(HWND hwnd, LPARAM lp) {
     return TRUE;
 }
 
+/* SetupThread: LLHookThread + 3-second re-clear loop for Modes 1-4.
+   In Mode 5, wdpcore is manually mapped — CreateThread calls are killed by the
+   RtlUserThreadStart hook (start addr in unmapped code). This thread may never
+   run in Mode 5, but DllMain already cleared WDA synchronously so that's OK. */
 static DWORD WINAPI SetupThread(LPVOID lp) {
     char buf[128];
     wsprintfA(buf, "SetupThread pid=%u", GetCurrentProcessId());
     DbgLog(buf);
 
-    /* --- SetWindowDisplayAffinity inline hook --- */
-    HMODULE hU32 = GetModuleHandleW(L"user32.dll");
-    if (!hU32) { DbgLog("ERROR: user32 not found"); return 1; }
+    /* g_pSetWDA, g_orig, g_patch, and the inline hook were set up synchronously
+       in DllMain — skip redundant init here. */
 
-    g_pSetWDA = (void*)GetProcAddress(hU32, "SetWindowDisplayAffinity");
-    if (!g_pSetWDA) { DbgLog("ERROR: SetWindowDisplayAffinity not found"); return 1; }
-
-    wsprintfA(buf, "SetWindowDisplayAffinity @ %p", g_pSetWDA);
-    DbgLog(buf);
-
-    Cpy14(g_orig, (BYTE*)g_pSetWDA);
-
-    /* MOV RAX, imm64 / JMP RAX — 14-byte absolute indirect jump */
-    g_patch[0]=0x48; g_patch[1]=0xB8;
-    *(UINT64*)(g_patch+2) = (UINT64)(ULONG_PTR)MySetWDA;
-    g_patch[10]=0xFF; g_patch[11]=0xE0;
-    g_patch[12]=0x90; g_patch[13]=0x90;
-
-    InstallHook();
-    DbgLog("SetWDA hook installed");
-
-    /* Start LL input hook thread immediately so KbdLL/MouseLL hooks are in the
-       LIFO chain before the target process installs its own hooks (e.g. InputTest
-       constructor runs before GetMessage, so we must be faster). */
+    /* Start LL input hook thread so KbdLL/MouseLL hooks are in the LIFO chain
+       before the target process installs its own hooks. */
     g_llThread = CreateThread(NULL, 0, LLHookThread, NULL, 0, &g_llThreadId);
     if (g_llThread) {
-        DbgLog("LLHookThread launched (early, before WDA loop)");
+        DbgLog("LLHookThread launched");
         CloseHandle(g_llThread);
     } else {
         wsprintfA(buf, "LLHookThread CreateThread FAILED err=%u", GetLastError());
         DbgLog(buf);
     }
 
-    /* Retry WDA clear for 3 seconds: handles apps that already had WDA set before
-       injection, and brief race windows. 50ms between cycles = ~60 attempts. */
+    /* Re-clear WDA for 3 seconds: handles apps that re-set WDA after injection
+       (e.g. FakeLDB's 200ms re-apply timer) and late-created windows. */
+    if (!g_pSetWDA) { DbgLog("SetupThread: g_pSetWDA NULL — skipping loop"); return 1; }
     DWORD endTime = GetTickCount() + 3000;
     int cycles = 0;
     while (GetTickCount() < endTime) {
@@ -203,7 +189,7 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
         Sleep(50);
     }
 
-    wsprintfA(buf, "Initial clear done (%d cycles). WDA hook remains active.", cycles);
+    wsprintfA(buf, "Re-clear done (%d cycles). WDA hook remains active.", cycles);
     DbgLog(buf);
 
     return 0;
@@ -237,11 +223,61 @@ BOOL APIENTRY DllMain(HMODULE hMod, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hMod);
         g_hMod = hMod;
+
+        char buf[128];
+        wsprintfA(buf, "DllMain ATTACH pid=%u hMod=%p", GetCurrentProcessId(), (void*)(ULONG_PTR)hMod);
+        DbgLog(buf);
+
+        /*
+         * WDA clear + inline hook done synchronously here so Mode 5 works.
+         * In Mode 5, wdpcore is manually mapped — CreateThread calls are killed
+         * by an RtlUserThreadStart hook (start addrs in unmapped code fail
+         * GetModuleHandleEx).  DllMain runs on the calling loader thread which
+         * is not a new thread, so it is safe to do real work here.
+         *
+         * Sequence:
+         *   1. Save original SetWindowDisplayAffinity bytes into g_orig.
+         *   2. EnumWindows → ClearCb: call real SetWDA(hwnd, 0) on all WDA
+         *      windows while the function is still unpatched.
+         *   3. InstallHook: redirect SetWDA to MySetWDA (no-op stub).  Any
+         *      subsequent SetWDA call (e.g. FakeLDB's 200ms re-apply timer) hits
+         *      the stub and returns TRUE without actually setting WDA.
+         */
+        HMODULE hU32 = GetModuleHandleW(L"user32.dll");
+        if (hU32) {
+            g_pSetWDA = (void*)GetProcAddress(hU32, "SetWindowDisplayAffinity");
+            if (g_pSetWDA) {
+                wsprintfA(buf, "SetWindowDisplayAffinity @ %p", g_pSetWDA);
+                DbgLog(buf);
+
+                Cpy14(g_orig, (BYTE*)g_pSetWDA);
+
+                /* MOV RAX, imm64 / JMP RAX — 14-byte absolute patch */
+                g_patch[0]=0x48; g_patch[1]=0xB8;
+                *(UINT64*)(g_patch+2) = (UINT64)(ULONG_PTR)MySetWDA;
+                g_patch[10]=0xFF; g_patch[11]=0xE0;
+                g_patch[12]=0x90; g_patch[13]=0x90;
+
+                EnumWindows(ClearCb, (LPARAM)(ULONG_PTR)GetCurrentProcessId());
+                InstallHook();
+                DbgLog("SetWDA hook installed (DllMain sync)");
+            } else {
+                DbgLog("ERROR: SetWindowDisplayAffinity not found");
+            }
+        } else {
+            DbgLog("ERROR: user32.dll not found");
+        }
+
+        /* SetupThread handles LLHookThread + 3-second re-clear loop (Modes 1-4).
+           May be killed in Mode 5 — WDA already handled above. */
         HANDLE h = CreateThread(NULL, 0, SetupThread, NULL, 0, NULL);
         if (h) CloseHandle(h);
+        else {
+            wsprintfA(buf, "SetupThread CreateThread FAILED err=%u (Mode 5? — OK)", GetLastError());
+            DbgLog(buf);
+        }
     } else if (reason == DLL_PROCESS_DETACH && reserved == NULL) {
         if (g_hooked) RemoveHook();
-        /* Signal LL hook thread to exit */
         if (g_llThreadId) PostThreadMessageW(g_llThreadId, WM_QUIT, 0, 0);
     }
     return TRUE;
