@@ -25,7 +25,8 @@
 
 // ── Pool tag ──────────────────────────────────────────────────────────────────
 #define POOL_TAG 'pByK'
-#define WDA_NONE 0
+#define WDA_NONE               0
+#define WDA_MONITOR            1
 #define WDA_EXCLUDEFROMCAPTURE 0x11
 
 // ── SystemProcessInformation ──────────────────────────────────────────────────
@@ -85,8 +86,9 @@ extern POBJECT_TYPE *PsProcessType;
 
 // ── Globals ───────────────────────────────────────────────────────────────────
 static PDEVICE_OBJECT   g_Device        = NULL;
-static KEVENT           g_StopEvent     = {0};
+static KEVENT           g_StopEvent     = {0};   // NotificationEvent — wakes all threads
 static PKTHREAD         g_WorkerThread  = NULL;
+static PKTHREAD         g_GuardThread   = NULL;  // WDA guardian (re-apply loop)
 static volatile LONG    g_Active        = 0;
 static volatile ULONG   g_ClearedTotal  = 0;
 static volatile ULONG   g_LastPass      = 0;
@@ -265,6 +267,171 @@ static ULONG DoBypassPass(void) {
     return cleared;
 }
 
+// ── Inline hook on NtUserSetWindowDisplayAffinity ────────────────────────────
+//
+// When g_ProtectedPid is set, we install a 5-byte relative JMP at the start of
+// NtUserSetWindowDisplayAffinity.  Our hook blocks any call that tries to clear
+// WDA (affinity==0) on a window owned by g_ProtectedPid from an external process.
+// This is what stops wdphook.exe's EnumWindows+SetWDA loop from winning.
+//
+// win32kfull.sys is NOT a PatchGuard-protected code region (PG targets ntoskrnl,
+// hal, and SSDT — not the Win32 subsystem driver), so this is safe on test VMs.
+//
+#define HOOK_PATCH 5  // E9 rel32 — 5-byte relative JMP
+#define TRAMP_SIZE (HOOK_PATCH + 14)  // 5 orig bytes + FF25 abs-JMP back
+
+static UCHAR    g_HookOrig[HOOK_PATCH] = {0};
+static PUCHAR   g_Tramp = NULL;          // NonPagedPool (executable) trampoline
+static BOOLEAN  g_HookActive = FALSE;
+static PFN_NtUserSetWDA g_TrampFn = NULL;
+
+// Our replacement: called instead of the real NtUserSetWindowDisplayAffinity.
+// RCX = hwnd, RDX = affinity (x64 MSVC calling convention)
+static ULONG NTAPI HookSetWDA(PVOID hwnd, ULONG affinity)
+{
+    if (affinity == WDA_NONE) {
+        LONG64 protPid = InterlockedCompareExchange64(&g_ProtectedPid, 0, 0);
+        if (protPid != 0 && pfnQueryWindow != NULL) {
+            __try {
+                ULONG_PTR ownerPid = pfnQueryWindow(hwnd, 0);
+                if ((LONG64)ownerPid == protPid) {
+                    // Caller trying to clear WDA on mode7helper's window.
+                    // Block it unless the protected process itself is asking.
+                    if ((LONG64)(ULONG_PTR)PsGetCurrentProcessId() != protPid)
+                        return 1; // silently succeed without clearing
+                }
+            } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+    }
+    return g_TrampFn ? g_TrampFn(hwnd, affinity) : 0;
+}
+
+static NTSTATUS InstallSetWDAHook(void)
+{
+    if (g_HookActive) return STATUS_SUCCESS;
+    if (!pfnSetWDA || !pfnQueryWindow) return STATUS_NOT_FOUND;
+
+    // Allocate executable trampoline: [5 orig bytes][14-byte abs JMP to pfnSetWDA+5]
+    g_Tramp = (PUCHAR)ExAllocatePoolWithTag(NonPagedPool, TRAMP_SIZE, POOL_TAG);
+    if (!g_Tramp) return STATUS_INSUFFICIENT_RESOURCES;
+
+    // Compute relative offset: hook function must be within ±2 GB of pfnSetWDA
+    LONGLONG rel = (LONGLONG)(ULONG_PTR)HookSetWDA
+                 - ((LONGLONG)(ULONG_PTR)pfnSetWDA + HOOK_PATCH);
+    if (rel < -0x7FFFFFFFLL || rel > 0x7FFFFFFFLL) {
+        DbgPrint("kbypass: SetWDA hook offset too large (%lld), skipping hook\n", rel);
+        ExFreePoolWithTag(g_Tramp, POOL_TAG); g_Tramp = NULL;
+        return STATUS_NOT_SUPPORTED; // guardian thread still protects
+    }
+
+    // Build trampoline
+    RtlCopyMemory(g_Tramp, pfnSetWDA, HOOK_PATCH);         // 5 original bytes
+    g_Tramp[5]  = 0xFF; g_Tramp[6]  = 0x25;                // FF 25 00 00 00 00
+    g_Tramp[7]  = 0;    g_Tramp[8]  = 0;
+    g_Tramp[9]  = 0;    g_Tramp[10] = 0;
+    *(PVOID*)(g_Tramp + 11) = (PUCHAR)pfnSetWDA + HOOK_PATCH; // JMP back to orig+5
+    g_TrampFn = (PFN_NtUserSetWDA)g_Tramp;
+
+    // Save original 5 bytes
+    RtlCopyMemory(g_HookOrig, pfnSetWDA, HOOK_PATCH);
+
+    // Map the physical page containing pfnSetWDA as writable and patch it
+    PHYSICAL_ADDRESS pa = MmGetPhysicalAddress(pfnSetWDA);
+    PUCHAR rw = (PUCHAR)MmMapIoSpace(pa, HOOK_PATCH, MmNonCached);
+    if (!rw) {
+        ExFreePoolWithTag(g_Tramp, POOL_TAG); g_Tramp = NULL;
+        return STATUS_UNSUCCESSFUL;
+    }
+    rw[0] = 0xE9;
+    *(INT32*)(rw + 1) = (INT32)rel;
+    MmUnmapIoSpace(rw, HOOK_PATCH);
+
+    g_HookActive = TRUE;
+    DbgPrint("kbypass: SetWDA hook installed (rel=%lld tramp=%p)\n", rel, g_Tramp);
+    return STATUS_SUCCESS;
+}
+
+static void RemoveSetWDAHook(void)
+{
+    if (!g_HookActive || !pfnSetWDA) return;
+
+    PHYSICAL_ADDRESS pa = MmGetPhysicalAddress(pfnSetWDA);
+    PUCHAR rw = (PUCHAR)MmMapIoSpace(pa, HOOK_PATCH, MmNonCached);
+    if (rw) {
+        RtlCopyMemory(rw, g_HookOrig, HOOK_PATCH);
+        MmUnmapIoSpace(rw, HOOK_PATCH);
+    }
+    if (g_Tramp) { ExFreePoolWithTag(g_Tramp, POOL_TAG); g_Tramp = NULL; }
+    g_TrampFn   = NULL;
+    g_HookActive = FALSE;
+    DbgPrint("kbypass: SetWDA hook removed\n");
+}
+
+// ── WDA guardian thread ───────────────────────────────────────────────────────
+// Secondary protection: every 15ms, re-applies WDA_MONITOR on any window owned
+// by g_ProtectedPid that has had its WDA cleared (e.g. if the hook wasn't
+// installed because the offset was too far, or on Windows builds where it fails).
+static VOID WdaGuardThread(PVOID ctx) {
+    UNREFERENCED_PARAMETER(ctx);
+    DbgPrint("kbypass: WDA guard thread started\n");
+    LARGE_INTEGER interval;
+    interval.QuadPart = -150000LL; // 15ms in 100ns units
+
+    while (TRUE) {
+        NTSTATUS st = KeWaitForSingleObject(&g_StopEvent, Executive, KernelMode,
+                                            FALSE, &interval);
+        if (st == STATUS_SUCCESS) break; // stop signaled (NotificationEvent)
+
+        LONG64 protPid = InterlockedCompareExchange64(&g_ProtectedPid, 0, 0);
+        if (!protPid || !pfnQueryWindow) continue;
+
+        PEPROCESS proc = FindGuiProcess();
+        if (!proc) continue;
+
+        KAPC_STATE apc = {0};
+        KeStackAttachProcess(proc, &apc);
+
+        if (EnsureResolved()) {
+            // Try installing the SetWDA hook now that we have resolved exports.
+            // PROTECT_PID may have arrived before EnsureResolved ran, so retry here.
+            if (!g_HookActive && protPid) InstallSetWDAHook();
+
+            ULONG needed = 0;
+            pfnBuildHwnd(NULL, NULL, FALSE, FALSE, 0, 0, NULL, &needed);
+            if (needed > 0 && needed < 8192) {
+                ULONG allocCount = needed + 64;
+                PVOID* hwnds = (PVOID*)ExAllocatePoolWithTag(NonPagedPoolNx,
+                                    allocCount * sizeof(PVOID), POOL_TAG);
+                if (hwnds) {
+                    RtlZeroMemory(hwnds, allocCount * sizeof(PVOID));
+                    pfnBuildHwnd(NULL, NULL, FALSE, FALSE, 0, allocCount, hwnds, &needed);
+                    for (ULONG i = 0; i < needed && i < allocCount; i++) {
+                        if (!hwnds[i]) continue;
+                        __try {
+                            ULONG_PTR ownerPid = pfnQueryWindow(hwnds[i], 0);
+                            if ((LONG64)ownerPid == protPid) {
+                                ULONG aff = 0;
+                                if (pfnGetWDA(hwnds[i], &aff) && aff != WDA_MONITOR) {
+                                    pfnSetWDA(hwnds[i], WDA_MONITOR);
+                                    DbgPrint("kbypass: guardian restored WDA on %p\n",
+                                             hwnds[i]);
+                                }
+                            }
+                        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+                    }
+                    ExFreePoolWithTag(hwnds, POOL_TAG);
+                }
+            }
+        }
+
+        KeUnstackDetachProcess(&apc);
+        ObDereferenceObject(proc);
+    }
+
+    DbgPrint("kbypass: WDA guard thread exiting\n");
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
 // ── Worker thread ─────────────────────────────────────────────────────────────
 static VOID WorkerThread(PVOID ctx) {
     UNREFERENCED_PARAMETER(ctx);
@@ -428,15 +595,19 @@ static NTSTATUS DispatchDevCtl(PDEVICE_OBJECT dev, PIRP irp) {
         ULONG inLen = sl->Parameters.DeviceIoControl.InputBufferLength;
         if (inLen < sizeof(KBYPASS_PROTECT_PID)) { st = STATUS_BUFFER_TOO_SMALL; break; }
         PKBYPASS_PROTECT_PID req = (PKBYPASS_PROTECT_PID)irp->AssociatedIrp.SystemBuffer;
-        // Lazy-register ObCallbacks on first use
         st = RegisterProtectCallbacks();
         if (!NT_SUCCESS(st)) break;
         InterlockedExchange64(&g_ProtectedPid, (LONG64)req->pid64);
-        DbgPrint("kbypass: PROTECT_PID pid=%llu\n", req->pid64);
+        // Install SetWDA hook so external processes can't clear mode7helper's WDA.
+        // EnsureResolved() must run in a GUI process context — attempt from guard thread
+        // on next tick; InstallSetWDAHook is safe to call here if already resolved.
+        if (g_Resolved) InstallSetWDAHook();
+        DbgPrint("kbypass: PROTECT_PID pid=%llu hook=%d\n", req->pid64, g_HookActive);
         break;
     }
 
     case IOCTL_KBYPASS_UNPROTECT_PID:
+        RemoveSetWDAHook();
         InterlockedExchange64(&g_ProtectedPid, 0);
         DbgPrint("kbypass: UNPROTECT_PID\n");
         break;
@@ -463,7 +634,11 @@ static NTSTATUS DispatchCreateClose(PDEVICE_OBJECT dev, PIRP irp) {
 // ── Unload ────────────────────────────────────────────────────────────────────
 static VOID DriverUnload(PDRIVER_OBJECT drv) {
     UNREFERENCED_PARAMETER(drv);
-    // Stop worker thread
+    // Remove SetWDA hook before anything else
+    RemoveSetWDAHook();
+    InterlockedExchange64(&g_ProtectedPid, 0);
+
+    // Signal both threads to stop (NotificationEvent wakes all waiters)
     InterlockedExchange(&g_Active, 0);
     KeSetEvent(&g_StopEvent, 0, FALSE);
     if (g_WorkerThread) {
@@ -471,9 +646,12 @@ static VOID DriverUnload(PDRIVER_OBJECT drv) {
         ObDereferenceObject(g_WorkerThread);
         g_WorkerThread = NULL;
     }
-    // Unregister ObCallbacks before device is gone
+    if (g_GuardThread) {
+        KeWaitForSingleObject(g_GuardThread, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(g_GuardThread);
+        g_GuardThread = NULL;
+    }
     if (g_ObHandle) { ObUnRegisterCallbacks(g_ObHandle); g_ObHandle = NULL; }
-    InterlockedExchange64(&g_ProtectedPid, 0);
 
     // Remove device
     UNICODE_STRING symlink = RTL_CONSTANT_STRING(KBYPASS_SYMLINK);
@@ -511,8 +689,9 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING reg) {
         return st;
     }
 
-    // Initialize stop event and start worker thread
-    KeInitializeEvent(&g_StopEvent, SynchronizationEvent, FALSE);
+    // NotificationEvent so KeSetEvent wakes BOTH worker and guard threads at once
+    KeInitializeEvent(&g_StopEvent, NotificationEvent, FALSE);
+
     HANDLE hThread = NULL;
     st = PsCreateSystemThread(&hThread, THREAD_ALL_ACCESS, NULL, NULL, NULL,
                               WorkerThread, NULL);
@@ -526,6 +705,16 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING reg) {
                               (PVOID*)&g_WorkerThread, NULL);
     ZwClose(hThread);
 
-    DbgPrint("kbypass: loaded, device=%p thread=%p\n", g_Device, g_WorkerThread);
+    // Start WDA guardian thread (keeps mode7helper's WDA locked when PROTECT_PID is set)
+    HANDLE hGuard = NULL;
+    if (NT_SUCCESS(PsCreateSystemThread(&hGuard, THREAD_ALL_ACCESS, NULL, NULL, NULL,
+                                        WdaGuardThread, NULL))) {
+        ObReferenceObjectByHandle(hGuard, THREAD_ALL_ACCESS, NULL, KernelMode,
+                                  (PVOID*)&g_GuardThread, NULL);
+        ZwClose(hGuard);
+    }
+
+    DbgPrint("kbypass: loaded, device=%p worker=%p guard=%p\n",
+             g_Device, g_WorkerThread, g_GuardThread);
     return STATUS_SUCCESS;
 }
