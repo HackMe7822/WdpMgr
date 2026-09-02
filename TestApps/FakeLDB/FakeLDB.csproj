@@ -8,9 +8,13 @@
     <AssemblyName>FakeLDB</AssemblyName>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
-  <Target Name="CopyMode6Helper" AfterTargets="Build">
+  <Target Name="CopyHelpers" AfterTargets="Build">
     <Copy SourceFiles="$(MSBuildProjectDirectory)\mode6helper.exe"
           DestinationFolder="$(OutputPath)"
           SkipUnchangedFiles="true" />
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\mode7helper.exe"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('$(MSBuildProjectDirectory)\mode7helper.exe')" />
   </Target>
 </Project>

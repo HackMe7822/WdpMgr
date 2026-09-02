@@ -28,7 +28,7 @@ namespace FakeLDB
         static readonly string Exe = Process.GetCurrentProcess().MainModule.FileName;
         public LauncherForm()
         {
-            Text = "FakeLDB Launcher"; Width = 640; Height = 400;
+            Text = "FakeLDB Launcher"; Width = 640; Height = 450;
             FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.FromArgb(20,20,20); ForeColor = Color.White;
@@ -41,8 +41,9 @@ namespace FakeLDB
             Controls.Add(Btn(4,"Mode 4 — Mode 3 + Thread-Watcher poll  (race condition demo)",Color.FromArgb(80,50,0),179));
             Controls.Add(Btn(5,"Mode 5 — Mode 3 + RtlUserThreadStart hook  (real LDB technique)",Color.FromArgb(0,90,30),227));
             Controls.Add(Btn(6,"Mode 6 — Native subprocess + ACG + WDA(10ms)  (unbeatable user-mode)",Color.FromArgb(80,0,80),275));
-            Controls.Add(new Label { Left=10,Top=333,Width=610,Height=30,
-                Text="Use CaptureTest.exe to verify black/green. WdpHook bypasses 1-4; Mode 5 needs thread-hijack fix; Mode 6 requires kernel driver to bypass.",
+            Controls.Add(Btn(7,"Mode 7 — Mode 6 + kernel ObCallbacks process protection  (needs kbypass.sys)",Color.FromArgb(80,40,0),323));
+            Controls.Add(new Label { Left=10,Top=381,Width=610,Height=30,
+                Text="Modes 1-4: WdpHook bypasses. Mode 5: thread-hijack fix needed. Mode 6+: kernel driver (kbypass.sys) required. Mode 7: also needs kbypass ObCallbacks.",
                 Font=new Font("Segoe UI",8), ForeColor=Color.DimGray });
         }
         Button Btn(int mode, string text, Color bg, int top)
@@ -101,6 +102,11 @@ namespace FakeLDB
         int     _m6HelperPid;
         Label   _m6Status;
 
+        // Mode 7 — Mode 6 + kbypass.sys ObCallbacks process protection
+        Process _m7Proc;
+        int     _m7HelperPid;
+        Label   _m7Status;
+
         readonly int _mode;
         Label _lblTick, _lblWda, _lblMit;
         System.Windows.Forms.Timer _tick, _reapply;
@@ -149,6 +155,12 @@ namespace FakeLDB
                     Padding=new Padding(6,0,0,0),Dock=DockStyle.Bottom,Height=24};
                 Controls.Add(_m6Status);
             }
+            if (mode==7) {
+                _m7Status=new Label{Font=new Font("Segoe UI",8.5f),ForeColor=Color.Orange,
+                    BackColor=Color.FromArgb(12,12,12),TextAlign=ContentAlignment.MiddleLeft,
+                    Padding=new Padding(6,0,0,0),Dock=DockStyle.Bottom,Height=24};
+                Controls.Add(_m7Status);
+            }
             Load+=(s,e)=>{
                 ApplyMitigations();
                 SetWindowDisplayAffinity(Handle,1);
@@ -157,23 +169,25 @@ namespace FakeLDB
                 if (mode==4) new Thread(WatcherLoop){IsBackground=true}.Start();
                 if (mode==5) InstallRutsHook();
                 if (mode==6) StartMode6Helper();
+                if (mode==7) StartMode7Helper();
             };
             FormClosed+=(s,e)=>{
                 _watcherStop=true; _tick.Stop(); _reapply?.Stop();
                 if (mode==5) UninstallRutsHook();
                 if (mode==6) StopMode6Helper();
+                if (mode==7) StopMode7Helper();
             };
         }
 
         void ApplyMitigations()
         {
-            if (_mode>=3 && _mode!=6) {
+            if (_mode>=3 && _mode!=6 && _mode!=7) {
                 SetErrorMode(SEM_FAIL|SEM_NOOPEN);
                 uint sem=SEM_FAIL; NtSetInformationProcess((IntPtr)(-1),ProcessDefaultHardErrorMode,ref sem,4);
             }
-            if (_mode>=2 && _mode!=6) { uint f=1; SetProcessMitigationPolicy(PolicyExtPoint,ref f,4); }
-            if (_mode>=3 && _mode!=6) { uint f=1; SetProcessMitigationPolicy(PolicySignature,ref f,4); }
-            // Mode 6: mitigations are applied inside mode6helper.exe (native process).
+            if (_mode>=2 && _mode!=6 && _mode!=7) { uint f=1; SetProcessMitigationPolicy(PolicyExtPoint,ref f,4); }
+            if (_mode>=3 && _mode!=6 && _mode!=7) { uint f=1; SetProcessMitigationPolicy(PolicySignature,ref f,4); }
+            // Modes 6 & 7: mitigations are applied inside the native helper subprocess.
             // ACG cannot be set in a .NET process — the CLR JIT needs executable pages.
         }
 
@@ -313,6 +327,50 @@ namespace FakeLDB
             try { if(_m6Proc!=null && !_m6Proc.HasExited) _m6Proc.Kill(); } catch {}
         }
 
+        // ── Mode 7 helper management ──────────────────────────────────────────
+        void StartMode7Helper()
+        {
+            try {
+                string dir = AppDomain.CurrentDomain.BaseDirectory;
+                string exe = Path.Combine(dir, "mode7helper.exe");
+                if (!File.Exists(exe)) {
+                    if(_m7Status!=null) _m7Status.Text = "mode7helper.exe not found next to FakeLDB.exe";
+                    return;
+                }
+
+                uint parentPid = GetCurrentProcessId();
+                var psi = new ProcessStartInfo(exe, parentPid.ToString()) {
+                    UseShellExecute=false, RedirectStandardOutput=true, CreateNoWindow=false };
+                _m7Proc = Process.Start(psi);
+                if (_m7Proc == null) { if(_m7Status!=null) _m7Status.Text="Helper: FAILED TO START"; return; }
+
+                string line = _m7Proc.StandardOutput.ReadLine();
+                _m7HelperPid = int.TryParse(line?.Trim(), out int pid) ? pid : 0;
+                if(_m7Status!=null) {
+                    _m7Status.Text = "Mode 7 helper: RUNNING  PID=" + _m7HelperPid +
+                                     "  ACG+MicrosoftSigned+ExtPtDisable+ObCallbacks+WDA(10ms)";
+                    _m7Status.ForeColor = Color.Orange;
+                }
+
+                new Thread(() => {
+                    _m7Proc?.WaitForExit();
+                    try { BeginInvoke((Action)(()=>{
+                        if(_m7Status!=null) {
+                            _m7Status.Text="Mode 7 helper: STOPPED (PID="+_m7HelperPid+")";
+                            _m7Status.ForeColor=Color.Tomato;
+                        }
+                    })); } catch {}
+                }) { IsBackground=true }.Start();
+            } catch(Exception ex) {
+                if(_m7Status!=null) _m7Status.Text="Mode 7 error: "+ex.Message;
+            }
+        }
+
+        void StopMode7Helper()
+        {
+            try { if(_m7Proc!=null && !_m7Proc.HasExited) _m7Proc.Kill(); } catch {}
+        }
+
         // ── UI ────────────────────────────────────────────────────────────────
         internal void RefreshWda()
         {
@@ -335,6 +393,10 @@ namespace FakeLDB
                 bool hr = _m6Proc!=null && !_m6Proc.HasExited;
                 s+=" | Helper PID="+(hr?_m6HelperPid.ToString():"not running")+" ACG+MicrosoftSigned+ExtPtDisable+WDA(10ms)";
             }
+            if (_mode==7) {
+                bool hr = _m7Proc!=null && !_m7Proc.HasExited;
+                s+=" | Helper PID="+(hr?_m7HelperPid.ToString():"not running")+" ACG+MicrosoftSigned+ExtPtDisable+ObCallbacks+WDA(10ms)";
+            }
             _lblMit.Text=s;
         }
         static string ModeName(int m){
@@ -343,7 +405,8 @@ namespace FakeLDB
             if(m==3)return"WDA + ExtensionPointDisable + MicrosoftSignedOnly";
             if(m==4)return"Mode 3 + Thread-Watcher poll";
             if(m==5)return"Mode 3 + RtlUserThreadStart hook";
-            return"Native subprocess + ACG + WDA(10ms)";
+            if(m==6)return"Native subprocess + ACG + WDA(10ms)";
+            return"Mode 6 + kernel ObCallbacks process protection";
         }
         static Color ModeColor(int m){
             if(m==1)return Color.DarkRed;
@@ -351,7 +414,8 @@ namespace FakeLDB
             if(m==3)return Color.FromArgb(0,60,120);
             if(m==4)return Color.FromArgb(100,70,0);
             if(m==5)return Color.FromArgb(0,100,30);
-            return Color.FromArgb(80,0,80);
+            if(m==6)return Color.FromArgb(80,0,80);
+            return Color.FromArgb(80,40,0);
         }
         static string ModeInfo(int m){
             if(m==1)return"WDA_MONITOR only.\nWH_GETMESSAGE injection → GREEN after WdpHook.";
@@ -365,7 +429,7 @@ namespace FakeLDB
                    "start addr in a module → CLR/OS thread → runs normally.\n"+
                    "Hook stays active for all subsequent injection attempts.\n"+
                    "Stays BLACK. Represents TOEFL, Respondus, SAT LDB user-mode agent.";
-            return"Spawns mode6helper.exe — a native (non-.NET) Win32 process.\n"+
+            if(m==6)return"Spawns mode6helper.exe — a native (non-.NET) Win32 process.\n"+
                    "ACG (ProcessDynamicCodePolicy) set before any thread:\n"+
                    "  VirtualAllocEx(PAGE_EXECUTE_READWRITE) → ERROR_ACCESS_DENIED\n"+
                    "  Thread-hijack shellcode, APC shellcode → ALL fail immediately.\n"+
@@ -374,6 +438,15 @@ namespace FakeLDB
                    "ACG cannot be used in this .NET process — CLR JIT needs executable pages.\n"+
                    "See the Mode 6 helper window for the protected content.\n"+
                    "Bypass requires a kernel driver (SSDT hook, ObRegisterCallbacks, or PPL).";
+            return"Spawns mode7helper.exe: all Mode 6 protections plus kernel handle stripping.\n"+
+                   "Requires kbypass.sys loaded (sc start KernelBypass).\n\n"+
+                   "kbypass.sys registers ObRegisterCallbacks which strips from any OpenProcess:\n"+
+                   "  PROCESS_VM_OPERATION / PROCESS_VM_READ / PROCESS_VM_WRITE\n"+
+                   "  PROCESS_CREATE_THREAD / PROCESS_SUSPEND_RESUME / PROCESS_TERMINATE\n\n"+
+                   "Result: WdpMgr OpenProcess(ALL_ACCESS) returns a handle but:\n"+
+                   "  VirtualAllocEx → ERROR_ACCESS_DENIED (no VM_OPERATION)\n"+
+                   "  CreateRemoteThread → ERROR_ACCESS_DENIED (no CREATE_THREAD)\n\n"+
+                   "If kbypass.sys is not loaded, helper runs as Mode 6 (fallback).";
         }
     }
 }

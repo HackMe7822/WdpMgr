@@ -77,6 +77,9 @@ NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(ULONG, PVOID, ULONG, PULONG);
 NTSYSAPI NTSTATUS NTAPI PsLookupProcessByProcessId(HANDLE, PEPROCESS*);
 NTSYSAPI ULONG    NTAPI PsGetProcessSessionId(PEPROCESS);
 
+// PsProcessType is exported by ntoskrnl but not always declared in older WDK headers
+extern POBJECT_TYPE *PsProcessType;
+
 // ── Globals ───────────────────────────────────────────────────────────────────
 static PDEVICE_OBJECT   g_Device        = NULL;
 static KEVENT           g_StopEvent     = {0};
@@ -85,6 +88,10 @@ static volatile LONG    g_Active        = 0;
 static volatile ULONG   g_ClearedTotal  = 0;
 static volatile ULONG   g_LastPass      = 0;
 static volatile ULONG   g_PassCount     = 0;
+
+// ── Process-protection globals (ObRegisterCallbacks) ──────────────────────────
+static volatile LONG64  g_ProtectedPid  = 0;   // PID protected by handle stripping
+static PVOID            g_ObHandle      = NULL; // ObRegisterCallbacks registration handle
 
 static PFN_NtUserSetWDA        pfnSetWDA   = NULL;
 static PFN_NtUserGetWDA        pfnGetWDA   = NULL;
@@ -274,6 +281,80 @@ static VOID WorkerThread(PVOID ctx) {
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
 
+// ── Process handle protection via ObRegisterCallbacks ────────────────────────
+//
+// Strip dangerous access from any OpenProcess/DuplicateHandle targeting the
+// protected PID.  This simulates PPL handle restrictions without needing to
+// modify EPROCESS.Protection (which requires OS-version-specific offsets).
+//
+// Rights stripped — injector cannot allocate, write, or create threads:
+//   PROCESS_TERMINATE            0x0001
+//   PROCESS_CREATE_THREAD        0x0002
+//   PROCESS_SET_SESSIONID        0x0004
+//   PROCESS_VM_OPERATION         0x0008
+//   PROCESS_VM_READ              0x0010
+//   PROCESS_VM_WRITE             0x0020
+//   PROCESS_DUP_HANDLE           0x0040
+//   PROCESS_CREATE_PROCESS       0x0080
+//   PROCESS_SET_QUOTA            0x0100
+//   PROCESS_SET_INFORMATION      0x0200
+//   PROCESS_SUSPEND_RESUME       0x0800
+//   PROCESS_SET_LIMITED_INFO     0x2000
+//   DELETE / WRITE_DAC / WRITE_OWNER (standard rights)
+//
+// Rights kept (IsSafeToInject still works, injection attempt then fails):
+//   PROCESS_QUERY_INFORMATION    0x0400
+//   PROCESS_QUERY_LIMITED_INFO   0x1000
+//   READ_CONTROL                 0x00020000
+//   SYNCHRONIZE                  0x00100000
+
+#define PROC_RIGHTS_STRIP \
+    (0x0001UL | 0x0002UL | 0x0004UL | 0x0008UL | 0x0010UL | 0x0020UL | \
+     0x0040UL | 0x0080UL | 0x0100UL | 0x0200UL | 0x0800UL | 0x2000UL | \
+     0x00010000UL | 0x00040000UL | 0x00080000UL)
+
+static OB_PREOP_CALLBACK_STATUS ProcPreOp(PVOID ctx, POB_PRE_OPERATION_INFORMATION info)
+{
+    UNREFERENCED_PARAMETER(ctx);
+    if (info->ObjectType != *PsProcessType) return OB_PREOP_SUCCESS;
+
+    LONG64 pid = InterlockedCompareExchange64(&g_ProtectedPid, 0, 0);
+    if (!pid) return OB_PREOP_SUCCESS;
+
+    PEPROCESS target = (PEPROCESS)info->Object;
+    if ((LONG64)(ULONG_PTR)PsGetProcessId(target) != pid) return OB_PREOP_SUCCESS;
+
+    if (info->Operation == OB_OPERATION_HANDLE_CREATE)
+        info->Parameters->CreateHandleInformation.DesiredAccess &= ~PROC_RIGHTS_STRIP;
+    else if (info->Operation == OB_OPERATION_HANDLE_DUPLICATE)
+        info->Parameters->DuplicateHandleInformation.DesiredAccess &= ~PROC_RIGHTS_STRIP;
+
+    return OB_PREOP_SUCCESS;
+}
+
+static NTSTATUS RegisterProtectCallbacks(void)
+{
+    if (g_ObHandle) return STATUS_SUCCESS; // already registered
+
+    UNICODE_STRING altitude;
+    RtlInitUnicodeString(&altitude, L"321123");
+
+    OB_OPERATION_REGISTRATION opReg = {0};
+    opReg.ObjectType   = PsProcessType;
+    opReg.Operations   = OB_OPERATION_HANDLE_CREATE | OB_OPERATION_HANDLE_DUPLICATE;
+    opReg.PreOperation = ProcPreOp;
+
+    OB_CALLBACK_REGISTRATION reg = {0};
+    reg.Version                        = OB_FLT_REGISTRATION_VERSION;
+    reg.OperationRegistrationCount     = 1;
+    reg.Altitude                       = altitude;
+    reg.OperationRegistration          = &opReg;
+
+    NTSTATUS st = ObRegisterCallbacks(&reg, &g_ObHandle);
+    DbgPrint("kbypass: ObRegisterCallbacks status=%08X handle=%p\n", st, g_ObHandle);
+    return st;
+}
+
 // ── IOCTL dispatch ────────────────────────────────────────────────────────────
 static NTSTATUS DispatchDevCtl(PDEVICE_OBJECT dev, PIRP irp) {
     UNREFERENCED_PARAMETER(dev);
@@ -331,6 +412,23 @@ static NTSTATUS DispatchDevCtl(PDEVICE_OBJECT dev, PIRP irp) {
         break;
     }
 
+    case IOCTL_KBYPASS_PROTECT_PID: {
+        ULONG inLen = sl->Parameters.DeviceIoControl.InputBufferLength;
+        if (inLen < sizeof(KBYPASS_PROTECT_PID)) { st = STATUS_BUFFER_TOO_SMALL; break; }
+        PKBYPASS_PROTECT_PID req = (PKBYPASS_PROTECT_PID)irp->AssociatedIrp.SystemBuffer;
+        // Lazy-register ObCallbacks on first use
+        st = RegisterProtectCallbacks();
+        if (!NT_SUCCESS(st)) break;
+        InterlockedExchange64(&g_ProtectedPid, (LONG64)req->pid64);
+        DbgPrint("kbypass: PROTECT_PID pid=%llu\n", req->pid64);
+        break;
+    }
+
+    case IOCTL_KBYPASS_UNPROTECT_PID:
+        InterlockedExchange64(&g_ProtectedPid, 0);
+        DbgPrint("kbypass: UNPROTECT_PID\n");
+        break;
+
     default:
         st = STATUS_INVALID_DEVICE_REQUEST;
         break;
@@ -361,6 +459,10 @@ static VOID DriverUnload(PDRIVER_OBJECT drv) {
         ObDereferenceObject(g_WorkerThread);
         g_WorkerThread = NULL;
     }
+    // Unregister ObCallbacks before device is gone
+    if (g_ObHandle) { ObUnRegisterCallbacks(g_ObHandle); g_ObHandle = NULL; }
+    InterlockedExchange64(&g_ProtectedPid, 0);
+
     // Remove device
     UNICODE_STRING symlink = RTL_CONSTANT_STRING(KBYPASS_SYMLINK);
     IoDeleteSymbolicLink(&symlink);
