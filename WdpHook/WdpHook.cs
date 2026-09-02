@@ -44,14 +44,22 @@ namespace WdpHook
 
         protected override void OnStart(string[] args)
         {
+            const string diag = @"C:\ProgramData\WdpHook_diag.log";
+            try { File.AppendAllText(diag, DateTime.Now + " OnStart begin\r\n"); } catch { }
+            try {
             _stop = false;
+            try { File.AppendAllText(diag, DateTime.Now + " calling Program.Log\r\n"); } catch { }
             Program.Log("=== WdpHook service started PID=" + Process.GetCurrentProcess().Id + " ===");
 
             LicenseData lic;
-            if (!Program.ReadLicense(out lic)) { Program.Log("No license — stopping"); Stop(); return; }
-            if (!Program.VerifyLicense(lic))   { Program.Log("Bad sig — stopping");    Stop(); return; }
+            try { File.AppendAllText(diag, DateTime.Now + " ReadLicense\r\n"); } catch { }
+            if (!Program.ReadLicense(out lic)) { Program.Log("No license — stopping"); File.AppendAllText(diag, "No license\r\n"); Stop(); return; }
+            try { File.AppendAllText(diag, DateTime.Now + " VerifyLicense\r\n"); } catch { }
+            if (!Program.VerifyLicense(lic))   { Program.Log("Bad sig — stopping");    File.AppendAllText(diag, "Bad sig\r\n"); Stop(); return; }
 
+            try { File.AppendAllText(diag, DateTime.Now + " CheckIn start\r\n"); } catch { }
             string status = Program.CheckIn(lic);
+            try { File.AppendAllText(diag, DateTime.Now + " CheckIn result=" + status + "\r\n"); } catch { }
             Program.Log("Initial check-in: " + status);
             if (status == "expired" || status == "revoked" || status == "invalid")
             { Program.Log("Rejected — self-removing"); Program.SelfDestruct(); Environment.Exit(0); return; }
@@ -60,6 +68,8 @@ namespace WdpHook
 
             _spawnThread = new Thread(SpawnLoop) { IsBackground = true, Name = "SpawnLoop" };
             _spawnThread.Start();
+            try { File.AppendAllText(diag, DateTime.Now + " OnStart complete\r\n"); } catch { }
+            } catch (Exception ex) { try { File.AppendAllText(diag, "EXCEPTION: " + ex + "\r\n"); } catch { } throw; }
         }
 
         protected override void OnStop()
