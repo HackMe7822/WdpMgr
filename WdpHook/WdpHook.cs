@@ -1029,7 +1029,21 @@ namespace WdpHook
                         string liveExp   = ParseJsonField(resp, "expiry")       ?? "";
                         string liveDur   = ParseJsonField(resp, "durationDays") ?? "";
                         string liveActAt = ParseJsonField(resp, "activatedAt")  ?? "";
-                        if (!string.IsNullOrEmpty(liveType)) WriteState(liveType, liveExp, liveDur, liveActAt);
+                        if (!string.IsNullOrEmpty(liveType)) {
+                            // Only cache if expiry is non-empty and still in the future.
+                            // Server returning "ok" with a past expiry (e.g. stale DB row) must
+                            // not poison the state file — EnforceLocalExpiry would fire immediately.
+                            bool expOk = string.IsNullOrEmpty(liveExp);  // lifetime / no expiry → always ok
+                            if (!expOk) {
+                                DateTime px;
+                                if (DateTime.TryParse(liveExp, out px)) {
+                                    if (px.Kind == DateTimeKind.Unspecified) px = DateTime.SpecifyKind(px, DateTimeKind.Utc);
+                                    expOk = px > DateTime.UtcNow;
+                                } else { expOk = true; }  // unparseable → pass through
+                            }
+                            if (expOk) WriteState(liveType, liveExp, liveDur, liveActAt);
+                            else Log("CheckIn: server returned ok but expiry " + liveExp + " is past — not caching");
+                        }
                     }
                     return status;
                 } catch { }
@@ -1051,6 +1065,10 @@ namespace WdpHook
 
         internal static void StartLicenseLoop(LicenseData lic, Action onRevoke)
         {
+            // Delete stale cached state so ExpWatch doesn't fire on an old expired timestamp
+            // left over from a previous session. The first LicLoop CheckIn will write fresh state.
+            try { if (File.Exists(_statePath)) File.Delete(_statePath); } catch { }
+
             // Fast expiry watcher: checks every 30s so self-destruct fires at the exact moment, not just on check-in
             new Thread(() => {
                 while (true) { EnforceLocalExpiry(onRevoke); Thread.Sleep(30000); }
