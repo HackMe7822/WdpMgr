@@ -185,11 +185,19 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
             if (Thread32First(snap, &te)) {
                 do {
                     if (te.th32OwnerProcessID == pid && te.th32ThreadID != myTid) {
+                        /* hMod MUST be NULL for same-process thread-specific hooks
+                           (MSDN: "if the thread belongs to the current process,
+                           hMod must be NULL"). Passing a non-NULL hMod causes
+                           the call to fail silently on Win10+. */
                         HHOOK hgm = SetWindowsHookExW(WH_GETMESSAGE, GetMsgProc,
-                                                       g_hMod, te.th32ThreadID);
+                                                       NULL, te.th32ThreadID);
                         wsprintfA(buf, "SetupThread: WH_GETMESSAGE tid=%u hk=%p err=%u",
                             te.th32ThreadID, hgm, GetLastError());
                         DbgLog(buf);
+                        /* Post WM_NULL to wake the thread immediately so GetMsgProc
+                           fires right away rather than waiting for the next natural
+                           GetMessage call. */
+                        if (hgm) PostThreadMessageW(te.th32ThreadID, WM_NULL, 0, 0);
                     }
                 } while (Thread32Next(snap, &te));
             }
