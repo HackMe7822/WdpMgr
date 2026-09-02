@@ -1275,7 +1275,7 @@ namespace WdpHook
             _btnInstall.Click   += (s, e) => DoInstall();
             _btnUninstall.Click += (s, e) => DoUninstall();
             _btnOnce.Click      += (s, e) => DoRunOnce();
-            btnLog.Click        += (s, e) => { try { Process.Start(Program.LogPath); } catch { } };
+            btnLog.Click        += (s, e) => ShowLogDialog();
             _btnClose.Click     += (s, e) => Application.Exit();
 
             RefreshStatus();
@@ -1375,6 +1375,71 @@ namespace WdpHook
             else
                 countdown = string.Format("{0}d {1}h {2}m {3}s remaining", (int)rem.TotalDays, rem.Hours, rem.Minutes, rem.Seconds);
             return localStr + "  |  " + countdown;
+        }
+
+        void ShowLogDialog()
+        {
+            string text = "";
+            try { text = File.Exists(Program.LogPath) ? File.ReadAllText(Program.LogPath) : "(log file not found)"; }
+            catch (Exception ex) { text = "(error reading log: " + ex.Message + ")"; }
+
+            var dlg = new Form {
+                Text = "WdpHook Log", Width = 680, Height = 460,
+                StartPosition = FormStartPosition.CenterParent,
+                BackColor = Color.FromArgb(16, 51, 100), ForeColor = Color.White,
+                MinimizeBox = false, MaximizeBox = true, FormBorderStyle = FormBorderStyle.Sizable
+            };
+
+            var tb = new TextBox {
+                Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both,
+                WordWrap = false, Font = new Font("Consolas", 9f),
+                BackColor = Color.FromArgb(11, 37, 76), ForeColor = Color.FromArgb(200, 220, 255),
+                BorderStyle = BorderStyle.None, Text = text,
+                Dock = DockStyle.Fill, TabStop = false
+            };
+            // scroll to bottom
+            tb.SelectionStart = tb.Text.Length; tb.ScrollToCaret();
+
+            var panel = new Panel { Height = 42, Dock = DockStyle.Bottom, BackColor = Color.FromArgb(11, 37, 76) };
+
+            var btnCopy = new Button {
+                Text = "Copy All", Width = 110, Height = 28,
+                Left = 10, Top = 7, FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(38, 78, 130), ForeColor = Color.White
+            };
+            btnCopy.FlatAppearance.BorderColor = Color.FromArgb(80, 130, 200);
+            btnCopy.Click += (s, e) => {
+                try { Clipboard.SetText(tb.Text.Length > 0 ? tb.Text : " "); btnCopy.Text = "Copied!"; }
+                catch { }
+            };
+
+            var btnRefresh = new Button {
+                Text = "Refresh", Width = 90, Height = 28,
+                Left = 128, Top = 7, FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(38, 78, 130), ForeColor = Color.White
+            };
+            btnRefresh.FlatAppearance.BorderColor = Color.FromArgb(80, 130, 200);
+            btnRefresh.Click += (s, e) => {
+                try { tb.Text = File.Exists(Program.LogPath) ? File.ReadAllText(Program.LogPath) : "(log file not found)"; }
+                catch (Exception ex2) { tb.Text = "(error: " + ex2.Message + ")"; }
+                tb.SelectionStart = tb.Text.Length; tb.ScrollToCaret();
+                btnCopy.Text = "Copy All";
+            };
+
+            var btnClose = new Button {
+                Text = "Close", Width = 80, Height = 28,
+                Left = dlg.ClientSize.Width - 96, Top = 7,
+                Anchor = AnchorStyles.Right | AnchorStyles.Top,
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(38, 78, 130), ForeColor = Color.White
+            };
+            btnClose.FlatAppearance.BorderColor = Color.FromArgb(80, 130, 200);
+            btnClose.Click += (s, e) => dlg.Close();
+
+            panel.Controls.AddRange(new Control[] { btnCopy, btnRefresh, btnClose });
+            dlg.Controls.Add(tb);
+            dlg.Controls.Add(panel);
+            dlg.ShowDialog(this);
         }
 
         void SetBusy(string msg)
