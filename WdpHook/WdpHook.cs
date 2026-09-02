@@ -311,16 +311,22 @@ namespace WdpHook
         static void InjectDll()
         {
             try {
+                // Use process-ID-stamped filename so each run gets a fresh file even if
+                // an orphaned previous /hooks child has the shared name locked.
                 string dllPath = System.IO.Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                    "wdpcore.dll");
-                try { System.IO.File.WriteAllBytes(dllPath, Program.s_wdpcore); }
-                catch { /* file in use by another process — use existing copy on disk */ }
+                    "wdpcore_" + GetCurrentProcessId() + ".dll");
+                // Try to delete any stale copy first (from a crashed previous run with same PID — rare).
+                try { System.IO.File.Delete(dllPath); } catch { }
+                try {
+                    System.IO.File.WriteAllBytes(dllPath, Program.s_wdpcore);
+                    Program.Log("InjectDll: wrote " + Program.s_wdpcore.Length + " bytes → " + dllPath);
+                } catch (Exception ex) { Program.Log("InjectDll: write failed — " + ex.Message); return; }
                 _dllPath = dllPath;
                 _hDll = LoadLibrary(dllPath);
                 if (_hDll == IntPtr.Zero) { Program.Log("InjectDll: LoadLibrary failed err=" + Marshal.GetLastWin32Error()); return; }
                 IntPtr proc = GetProcAddress(_hDll, "GetMsgProc");
-                if (proc == IntPtr.Zero) { Program.Log("InjectDll: GetProcAddress failed"); return; }
+                if (proc == IntPtr.Zero) { Program.Log("InjectDll: GetProcAddress failed err=" + Marshal.GetLastWin32Error()); return; }
                 _hGetMsg     = SetWindowsHookExW(3, proc, _hDll, 0);  // WH_GETMESSAGE=3
                 _dllInjected = _hGetMsg != IntPtr.Zero;
                 Program.Log("InjectDll: WH_GETMESSAGE hook=" + _hGetMsg + " active=" + _dllInjected + " err=" + Marshal.GetLastWin32Error());
@@ -793,23 +799,8 @@ namespace WdpHook
             {
                 Thread.Sleep(150);
 
-                // WDA clear — only when wdpcore injection is not active.
-                // When active, wdpcore handles WDA from inside each process (more reliable).
-                if (!_dllInjected)
-                {
-                    EnumWindows((hw, _) => {
-                        uint aff;
-                        if (GetWindowDisplayAffinity(hw, out aff) && aff != 0)
-                        {
-                            bool ok = SetWindowDisplayAffinity(hw, 0);
-                            uint err = (uint)Marshal.GetLastWin32Error();
-                            Program.Log("WDA hwnd=0x" + hw.ToString("X") + " ok=" + ok + " err=" + err);
-                        }
-                        return true;
-                    }, IntPtr.Zero);
-                }
-
                 // DirectInject fallback: every 3 s scan for WDA windows not yet injected via hook.
+                // MUST run BEFORE the WDA-clear block below — otherwise WDA is already 0 when we scan.
                 // Catches LDBs with ProcessExtensionPointDisablePolicy that block WH_GETMESSAGE injection.
                 if (_dllPath != null && cycles % 20 == 0)
                 {
@@ -827,6 +818,22 @@ namespace WdpHook
                         }
                         Program.Log("DirectInject: WDA window hwnd=0x" + hw.ToString("X8") + " pid=" + pid);
                         DirectInject(pid, _dllPath);
+                        return true;
+                    }, IntPtr.Zero);
+                }
+
+                // WDA clear — only when wdpcore injection is not active.
+                // When active, wdpcore handles WDA from inside each process (more reliable).
+                if (!_dllInjected)
+                {
+                    EnumWindows((hw, _) => {
+                        uint aff;
+                        if (GetWindowDisplayAffinity(hw, out aff) && aff != 0)
+                        {
+                            bool ok = SetWindowDisplayAffinity(hw, 0);
+                            uint err = (uint)Marshal.GetLastWin32Error();
+                            Program.Log("WDA hwnd=0x" + hw.ToString("X") + " ok=" + ok + " err=" + err);
+                        }
                         return true;
                     }, IntPtr.Zero);
                 }
