@@ -48,9 +48,18 @@ namespace InputTest
             _btnClear = new Button { Left = 462, Top = 58, Width = 80, Height = 26, Text = "Clear Log" };
             _btnClear.Click += (s, e) => _log.Clear();
 
-            _chkOnlyInjected = new CheckBox { Left = 555, Top = 62, Width = 200, Height = 20, Text = "Show only INJECTED events" };
+            var btnCopy = new Button { Left = 550, Top = 58, Width = 90, Height = 26, Text = "Copy Log" };
+            btnCopy.Click += (s, e) => {
+                try {
+                    string t = _log.Text;
+                    if (!string.IsNullOrEmpty(t)) { Clipboard.SetText(t); btnCopy.Text = "Copied!"; }
+                    System.Threading.Tasks.Task.Delay(1200).ContinueWith(_ => Invoke((Action)(() => btnCopy.Text = "Copy Log")));
+                } catch { }
+            };
 
-            top.Controls.AddRange(new Control[] { _hookStatus, _lblTarget, _btnSendKeys, _btnSendClick, _btnClear, _chkOnlyInjected });
+            _chkOnlyInjected = new CheckBox { Left = 648, Top = 62, Width = 200, Height = 20, Text = "Show only INJECTED events" };
+
+            top.Controls.AddRange(new Control[] { _hookStatus, _lblTarget, _btnSendKeys, _btnSendClick, _btnClear, btnCopy, _chkOnlyInjected });
 
             // ── legend ───────────────────────────────────────────────────────
             var legend = new Panel { Dock = DockStyle.Bottom, Height = 52 };

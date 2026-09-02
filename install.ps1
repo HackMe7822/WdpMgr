@@ -177,6 +177,22 @@ if (-not (Test-Path $dataDir)) { New-Item -ItemType Directory $dataDir -Force | 
     }
 }
 
+# Build WdpHook from source (webhook_base.exe)
+Info "Building WdpHook (webhook_base.exe)..."
+$wdpHookProj = "$repoDir\ClearDisplayAffinity\WdpHook\WdpHook.csproj"
+if (Test-Path $wdpHookProj) {
+    & dotnet build $wdpHookProj -c Release --nologo -v quiet 2>&1 | Out-Null
+    $built = "$repoDir\ClearDisplayAffinity\WdpHook\bin\Release\net472\WdpHook.exe"
+    if (Test-Path $built) {
+        Copy-Item $built "$dataDir\webhook_base.exe" -Force
+        OK "webhook_base.exe built ($([math]::Round((Get-Item "$dataDir\webhook_base.exe").Length/1KB,1)) KB)"
+    } else {
+        Warn "WdpHook build produced no output — webhook_base.exe missing; upload manually from Settings."
+    }
+} else {
+    Warn "WdpHook project not found in repo — webhook_base.exe missing; upload manually from Settings."
+}
+
 $svc = Get-Service $ServiceName -ErrorAction SilentlyContinue
 if ($svc) {
     if ($svc.Status -eq "Running") { Stop-Service $ServiceName -Force }
