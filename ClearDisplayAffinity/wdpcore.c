@@ -40,6 +40,8 @@ static HHOOK g_hKbdHook   = NULL;
 static HHOOK g_hMouseHook = NULL;
 static DWORD g_llThreadId = 0;
 static HANDLE g_llThread  = NULL;
+/* Flag: set to 1 when GetMsgProc has installed LL hooks on the target's UI thread */
+static volatile LONG g_llFromMsgProc = 0;
 
 #define LLKHF_INJECTED           0x00000010
 #define LLKHF_LOWER_IL_INJECTED  0x00000002
@@ -205,6 +207,30 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
     DbgLog(buf);
 
     return 0;
+}
+
+/* ── WH_GETMESSAGE callback ────────────────────────────────────────────────
+ * Runs on the TARGET PROCESS'S UI THREAD (the thread that called GetMessage).
+ * We install KbdLL / MouseLL hooks here on FIRST CALL so they fire on the
+ * same thread as the target's own LL hooks.  Same-thread CallNextHookEx is
+ * synchronous and shares lParam, so our flag-stripping propagates to the
+ * target's callback — unlike cross-thread delivery where each hook gets its
+ * own independent copy of KBDLLHOOKSTRUCT.
+ * ─────────────────────────────────────────────────────────────────────────── */
+__declspec(dllexport)
+LRESULT CALLBACK GetMsgProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (InterlockedExchange(&g_llFromMsgProc, 1) == 0) {
+        /* First call: install LL hooks from the target's UI thread. */
+        char buf[128];
+        wsprintfA(buf, "GetMsgProc: first call pid=%u tid=%u — installing LL hooks on UI thread",
+            GetCurrentProcessId(), GetCurrentThreadId());
+        DbgLog(buf);
+        HHOOK hK = SetWindowsHookExW(WH_KEYBOARD_LL, MyKbdLL,   g_hMod, 0);
+        HHOOK hM = SetWindowsHookExW(WH_MOUSE_LL,    MyMouseLL, g_hMod, 0);
+        wsprintfA(buf, "GetMsgProc: KbdLL=%p MouseLL=%p err=%u", hK, hM, GetLastError());
+        DbgLog(buf);
+    }
+    return CallNextHookEx(NULL, nCode, wParam, lParam);
 }
 
 BOOL APIENTRY DllMain(HMODULE hMod, DWORD reason, LPVOID reserved) {
