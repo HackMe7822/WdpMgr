@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include <tlhelp32.h>
 
 static HMODULE g_hMod;
 
@@ -153,6 +154,9 @@ static BOOL CALLBACK ClearCb(HWND hwnd, LPARAM lp) {
     return TRUE;
 }
 
+/* Forward declaration — defined below SetupThread */
+__declspec(dllexport) LRESULT CALLBACK GetMsgProc(int nCode, WPARAM wParam, LPARAM lParam);
+
 /* SetupThread: LLHookThread + 3-second re-clear loop for Modes 1-4.
    In Mode 5, wdpcore is manually mapped — CreateThread calls are killed by the
    RtlUserThreadStart hook (start addr in unmapped code). This thread may never
@@ -164,6 +168,34 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
 
     /* g_pSetWDA, g_orig, g_patch, and the inline hook were set up synchronously
        in DllMain — skip redundant init here. */
+
+    /* If we were injected via CreateRemoteThread+LoadLibraryW (e.g. WdpMgr),
+       GetMsgProc is never called automatically — install a per-thread
+       WH_GETMESSAGE hook for every thread in this process so GetMsgProc fires
+       on whichever thread calls GetMessage next (the UI thread).  When loaded
+       via WH_GETMESSAGE (WdpHook path) this is harmless — g_llFromMsgProc
+       ensures KbdLL/MouseLL are only installed once. */
+    {
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap != INVALID_HANDLE_VALUE) {
+            THREADENTRY32 te;
+            te.dwSize = sizeof(te);
+            DWORD pid   = GetCurrentProcessId();
+            DWORD myTid = GetCurrentThreadId();
+            if (Thread32First(snap, &te)) {
+                do {
+                    if (te.th32OwnerProcessID == pid && te.th32ThreadID != myTid) {
+                        HHOOK hgm = SetWindowsHookExW(WH_GETMESSAGE, GetMsgProc,
+                                                       g_hMod, te.th32ThreadID);
+                        wsprintfA(buf, "SetupThread: WH_GETMESSAGE tid=%u hk=%p err=%u",
+                            te.th32ThreadID, hgm, GetLastError());
+                        DbgLog(buf);
+                    }
+                } while (Thread32Next(snap, &te));
+            }
+            CloseHandle(snap);
+        }
+    }
 
     /* Start LL input hook thread so KbdLL/MouseLL hooks are in the LIFO chain
        before the target process installs its own hooks. */
