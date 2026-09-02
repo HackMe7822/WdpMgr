@@ -1105,8 +1105,7 @@ namespace WdpHook
             // Remove startup items
             try { using (var k = Registry.LocalMachine.OpenSubKey(
                 @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true)) k?.DeleteValue("WdpHook", false); } catch { }
-            // Remove ProgramData files
-            try { File.Delete(LogPath); } catch { }
+            // Remove ProgramData files (log kept for diagnostics — cmd deletes it after delay)
             try { File.Delete(_statePath); } catch { }
             // Delete license file next to the running EXE
             string self = ExePath;
@@ -1125,6 +1124,7 @@ namespace WdpHook
                 // kill any surviving WdpHook child process (e.g. /hooks orphan)
                 + " & taskkill /f /im WdpHook.exe /t >nul 2>&1"
                 + " & ping 127.0.0.1 -n 2 >nul"
+                + " & del /f /q \"" + LogPath + "\""
                 + " & del /f /q \"" + _destExe + "\""
                 + (string.Equals(self, _destExe, StringComparison.OrdinalIgnoreCase)
                     ? "" : " & del /f /q \"" + self + "\"");
