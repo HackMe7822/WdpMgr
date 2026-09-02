@@ -1137,6 +1137,12 @@ namespace WdpHook
             error = null;
             try { File.Copy(ExePath, _destExe, overwrite: true); }
             catch (Exception ex) { error = "Copy failed: " + ex.Message; return false; }
+            // Copy wdp.lic alongside if present (dev/build-output workflow — licensed EXEs have it embedded)
+            try {
+                string licSrc  = Path.Combine(Path.GetDirectoryName(ExePath) ?? "", "wdp.lic");
+                string licDest = Path.Combine(Path.GetDirectoryName(_destExe) ?? "", "wdp.lic");
+                if (File.Exists(licSrc)) File.Copy(licSrc, licDest, overwrite: true);
+            } catch { }
             string exe = "\"" + _destExe + "\"";
             if (!RunSc("create " + SvcName + " binPath= " + exe + " start= auto DisplayName= \"Windows Display Hook\" obj= LocalSystem"))
             { error = "sc create failed — run as Administrator"; return false; }
