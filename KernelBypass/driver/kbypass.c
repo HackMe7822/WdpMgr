@@ -66,11 +66,14 @@ typedef struct {
 typedef struct { ULONG Count; KB_MODULE_INFO Modules[1]; } KB_MODULE_LIST;
 
 // ── NtUser function types ─────────────────────────────────────────────────────
-typedef ULONG    (NTAPI *PFN_NtUserSetWDA)(PVOID hwnd, ULONG aff);
-typedef ULONG    (NTAPI *PFN_NtUserGetWDA)(PVOID hwnd, PULONG aff);
-typedef NTSTATUS (NTAPI *PFN_NtUserBuildHwndList)(
+typedef ULONG      (NTAPI *PFN_NtUserSetWDA)(PVOID hwnd, ULONG aff);
+typedef ULONG      (NTAPI *PFN_NtUserGetWDA)(PVOID hwnd, PULONG aff);
+typedef NTSTATUS   (NTAPI *PFN_NtUserBuildHwndList)(
     PVOID hDesktop, PVOID hwndNext, BOOLEAN fChildren, BOOLEAN fThread,
     ULONG idThread, ULONG cHwnd, PVOID* phwnds, PULONG pcNeeded);
+// NtUserQueryWindow(hwnd, 0) returns the PID of the window's owner process.
+// Used to skip clearing WDA on windows that belong to a protected PID.
+typedef ULONG_PTR  (NTAPI *PFN_NtUserQueryWindow)(PVOID hwnd, ULONG eType);
 
 // ── Kernel APIs not in wdm.h ──────────────────────────────────────────────────
 NTSYSAPI NTSTATUS NTAPI ZwQuerySystemInformation(ULONG, PVOID, ULONG, PULONG);
@@ -93,10 +96,11 @@ static volatile ULONG   g_PassCount     = 0;
 static volatile LONG64  g_ProtectedPid  = 0;   // PID protected by handle stripping
 static PVOID            g_ObHandle      = NULL; // ObRegisterCallbacks registration handle
 
-static PFN_NtUserSetWDA        pfnSetWDA   = NULL;
-static PFN_NtUserGetWDA        pfnGetWDA   = NULL;
+static PFN_NtUserSetWDA        pfnSetWDA    = NULL;
+static PFN_NtUserGetWDA        pfnGetWDA    = NULL;
 static PFN_NtUserBuildHwndList pfnBuildHwnd = NULL;
-static BOOLEAN                 g_Resolved  = FALSE;
+static PFN_NtUserQueryWindow   pfnQueryWindow = NULL; // optional; skip protected PID's windows
+static BOOLEAN                 g_Resolved   = FALSE;
 static ERESOURCE               g_ResolveLock = {0};
 
 // ── Inline helpers ────────────────────────────────────────────────────────────
@@ -166,12 +170,13 @@ static BOOLEAN EnsureResolved(void) {
     if (g_Resolved) return TRUE;
     PVOID base = FindWin32kBase();
     if (!base) return FALSE;
-    pfnSetWDA    = (PFN_NtUserSetWDA)       ResolveExport(base, "NtUserSetWindowDisplayAffinity");
-    pfnGetWDA    = (PFN_NtUserGetWDA)        ResolveExport(base, "NtUserGetWindowDisplayAffinity");
-    pfnBuildHwnd = (PFN_NtUserBuildHwndList) ResolveExport(base, "NtUserBuildHwndList");
+    pfnSetWDA      = (PFN_NtUserSetWDA)        ResolveExport(base, "NtUserSetWindowDisplayAffinity");
+    pfnGetWDA      = (PFN_NtUserGetWDA)         ResolveExport(base, "NtUserGetWindowDisplayAffinity");
+    pfnBuildHwnd   = (PFN_NtUserBuildHwndList)  ResolveExport(base, "NtUserBuildHwndList");
+    pfnQueryWindow = (PFN_NtUserQueryWindow)     ResolveExport(base, "NtUserQueryWindow"); // optional
     g_Resolved = (pfnSetWDA != NULL && pfnGetWDA != NULL && pfnBuildHwnd != NULL);
-    DbgPrint("kbypass: SetWDA=%p GetWDA=%p BuildHwnd=%p resolved=%d\n",
-             pfnSetWDA, pfnGetWDA, pfnBuildHwnd, g_Resolved);
+    DbgPrint("kbypass: SetWDA=%p GetWDA=%p BuildHwnd=%p QueryWindow=%p resolved=%d\n",
+             pfnSetWDA, pfnGetWDA, pfnBuildHwnd, pfnQueryWindow, g_Resolved);
     return g_Resolved;
 }
 
@@ -236,6 +241,13 @@ static ULONG DoBypassPass(void) {
                 for (ULONG i = 0; i < needed && i < allocCount; i++) {
                     if (!hwnds[i]) continue;
                     __try {
+                        // Skip windows belonging to the ObCallbacks-protected PID so the
+                        // kernel WDA-clearing thread doesn't fight mode7helper's WDA re-apply.
+                        LONG64 protPid = InterlockedCompareExchange64(&g_ProtectedPid, 0, 0);
+                        if (protPid != 0 && pfnQueryWindow != NULL) {
+                            ULONG_PTR ownerPid = pfnQueryWindow(hwnds[i], 0);
+                            if ((LONG64)ownerPid == protPid) continue;
+                        }
                         ULONG aff = 0;
                         if (pfnGetWDA(hwnds[i], &aff) && aff == WDA_EXCLUDEFROMCAPTURE) {
                             pfnSetWDA(hwnds[i], WDA_NONE);
