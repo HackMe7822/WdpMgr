@@ -919,17 +919,27 @@ namespace WdpMgr
             t.Start();
         }
 
-        // C:\ProgramData is writable by SYSTEM (service) and readable by all users —
-        // fixes "access denied" when a user-session process tries to LoadLibraryW the file.
+        // Versioned DLL name derived from content so a locked old-version file
+        // never blocks deployment of a new build.
+        static string ComputeDllTag()
+        {
+            int h = 5381;
+            foreach (byte b in s_dll) h = ((h << 5) + h) ^ b;  // djb2
+            return ((uint)h).ToString("x8");
+        }
+        static readonly string s_dllTag = ComputeDllTag();
+
+        // C:\ProgramData is writable by SYSTEM (service) and readable by all.
+        static readonly string s_dataDir =
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         internal static readonly string DllPath =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "wdpcore.dll");
+            Path.Combine(s_dataDir, "wdpcore_" + s_dllTag + ".dll");
 
         internal static readonly string LogPath =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "WdpMgr.log");
+            Path.Combine(s_dataDir, "WdpMgr.log");
 
-        internal static readonly string StatePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-            "WdpMgr.state");
+        internal static readonly string StatePath =
+            Path.Combine(s_dataDir, "WdpMgr.state");
 
         internal static void Log(string msg)
         {
@@ -937,22 +947,24 @@ namespace WdpMgr
             catch { }
         }
 
-        // Write embedded DLL to disk. If locked (loaded in other processes),
-        // the existing file has the same bytes — just continue with it.
+        // Write embedded DLL using a content-hashed filename so old locked
+        // versions never block a new build from being written.
         internal static void EnsureDll()
         {
+            // Clean up stale wdpcore_*.dll and the old unversioned wdpcore.dll.
             try
             {
-                File.WriteAllBytes(DllPath, s_dll);
-                Log("DLL written: " + DllPath);
+                foreach (var f in Directory.GetFiles(s_dataDir, "wdpcore_*.dll"))
+                    if (!string.Equals(f, DllPath, StringComparison.OrdinalIgnoreCase))
+                        try { File.Delete(f); } catch { }
+                string old = Path.Combine(s_dataDir, "wdpcore.dll");
+                if (File.Exists(old)) try { File.Delete(old); } catch { }
             }
-            catch (IOException)
-            {
-                if (File.Exists(DllPath))
-                    Log("DLL in use by other processes — reusing existing (OK)");
-                else
-                    throw;
-            }
+            catch { }
+
+            if (File.Exists(DllPath)) { Log("DLL already present: " + DllPath); return; }
+            File.WriteAllBytes(DllPath, s_dll);
+            Log("DLL written: " + DllPath);
         }
 
         internal static string GetServiceStatus()
