@@ -17,8 +17,12 @@ namespace InputTest
     {
         RichTextBox _log;
         Label _hookStatus, _lblTarget;
-        Button _btnSendKeys, _btnSendClick, _btnClear;
+        Button _btnSendKeys, _btnSendClick, _btnClear, _btnWda;
         CheckBox _chkOnlyInjected;
+        bool _wdaOn = false;
+
+        [DllImport("user32.dll")] static extern bool SetWindowDisplayAffinity(IntPtr h, uint a);
+        [DllImport("user32.dll")] static extern bool GetWindowDisplayAffinity(IntPtr h, out uint a);
 
         static IntPtr _hKbd = IntPtr.Zero;
         static IntPtr _hMouse = IntPtr.Zero;
@@ -33,22 +37,29 @@ namespace InputTest
             Width = 800; Height = 620; MinimumSize = new Size(700, 500);
 
             // ── top panel ────────────────────────────────────────────────────
-            var top = new Panel { Dock = DockStyle.Top, Height = 90, Padding = new Padding(6) };
+            var top = new Panel { Dock = DockStyle.Top, Height = 112, Padding = new Padding(6) };
 
             _hookStatus = new Label { Left = 6, Top = 6, Width = 340, Height = 22, Font = new Font("Segoe UI", 10, FontStyle.Bold), Text = "LL Hooks: installing..." };
 
-            _lblTarget = new Label { Left = 6, Top = 34, Width = 700, Height = 18, ForeColor = Color.DimGray, Text = "Target: (buttons below will send input 1.5 s after click — switch focus to LDB in that window)" };
+            _lblTarget = new Label { Left = 6, Top = 56, Width = 700, Height = 18, ForeColor = Color.DimGray, Text = "Target: (buttons below will send input 1.5 s after click — switch focus to LDB in that window)" };
 
-            _btnSendKeys = new Button { Left = 6, Top = 58, Width = 220, Height = 26, Text = "Send Keys  »Hello World«  (1.5 s delay)" };
+            _btnSendKeys = new Button { Left = 6, Top = 78, Width = 220, Height = 26, Text = "Send Keys  »Hello World«  (1.5 s delay)" };
             _btnSendKeys.Click += (s, e) => ScheduleSend(SendTestKeys, "Sending keys 'Hello World'…");
 
-            _btnSendClick = new Button { Left = 234, Top = 58, Width = 220, Height = 26, Text = "Send Left Mouse Click  (1.5 s delay)" };
+            _btnSendClick = new Button { Left = 234, Top = 78, Width = 220, Height = 26, Text = "Send Left Mouse Click  (1.5 s delay)" };
             _btnSendClick.Click += (s, e) => ScheduleSend(SendTestMouse, "Sending mouse LButton click…");
 
-            _btnClear = new Button { Left = 462, Top = 58, Width = 80, Height = 26, Text = "Clear Log" };
+            _btnWda = new Button { Left = 6, Top = 30, Width = 340, Height = 22,
+                Text = "[ OFF ]  Simulate LDB — set WDA on this window  (WdpHook will inject wdpcore.dll here)",
+                FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(60,20,20), ForeColor = Color.Salmon,
+                Font = new Font("Segoe UI", 8f) };
+            _btnWda.FlatAppearance.BorderColor = Color.Salmon;
+            _btnWda.Click += (s, e) => ToggleWda();
+
+            _btnClear = new Button { Left = 462, Top = 78, Width = 80, Height = 26, Text = "Clear Log" };
             _btnClear.Click += (s, e) => _log.Clear();
 
-            var btnCopy = new Button { Left = 550, Top = 58, Width = 90, Height = 26, Text = "Copy Log" };
+            var btnCopy = new Button { Left = 550, Top = 78, Width = 90, Height = 26, Text = "Copy Log" };
             btnCopy.Click += (s, e) => {
                 try {
                     string t = _log.Text;
@@ -57,9 +68,9 @@ namespace InputTest
                 } catch { }
             };
 
-            _chkOnlyInjected = new CheckBox { Left = 648, Top = 62, Width = 200, Height = 20, Text = "Show only INJECTED events" };
+            _chkOnlyInjected = new CheckBox { Left = 648, Top = 82, Width = 200, Height = 20, Text = "Show only INJECTED events" };
 
-            top.Controls.AddRange(new Control[] { _hookStatus, _lblTarget, _btnSendKeys, _btnSendClick, _btnClear, btnCopy, _chkOnlyInjected });
+            top.Controls.AddRange(new Control[] { _hookStatus, _btnWda, _lblTarget, _btnSendKeys, _btnSendClick, _btnClear, btnCopy, _chkOnlyInjected });
 
             // ── legend ───────────────────────────────────────────────────────
             var legend = new Panel { Dock = DockStyle.Bottom, Height = 52 };
@@ -76,6 +87,25 @@ namespace InputTest
 
             InstallHooks();
             FormClosed += (s, e) => RemoveHooks();
+        }
+
+        // ── WDA toggle — makes this window look like an LDB to WdpHook ─────────
+        void ToggleWda()
+        {
+            _wdaOn = !_wdaOn;
+            SetWindowDisplayAffinity(Handle, _wdaOn ? 1u : 0u);
+            if (_wdaOn) {
+                _btnWda.Text = "[ ON ]   WDA is SET — this window is protected (WdpHook should inject & clear it)";
+                _btnWda.BackColor = Color.FromArgb(20,60,20); _btnWda.ForeColor = Color.LightGreen;
+                _btnWda.FlatAppearance.BorderColor = Color.LightGreen;
+                AppendLine("WDA ON — window now looks like an LDB. WdpHook will inject wdpcore.dll and clear WDA within ~3s.", Color.Yellow);
+                AppendLine("After WdpHook clears WDA, run Send Keys — should show HARDWARE ✓ if injection worked.", Color.Yellow);
+            } else {
+                _btnWda.Text = "[ OFF ]  Simulate LDB — set WDA on this window  (WdpHook will inject wdpcore.dll here)";
+                _btnWda.BackColor = Color.FromArgb(60,20,20); _btnWda.ForeColor = Color.Salmon;
+                _btnWda.FlatAppearance.BorderColor = Color.Salmon;
+                AppendLine("WDA OFF — window unprotected.", Color.Gray);
+            }
         }
 
         // ── hook install/remove ──────────────────────────────────────────────
