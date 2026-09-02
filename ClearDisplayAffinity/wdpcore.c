@@ -177,7 +177,19 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
     InstallHook();
     DbgLog("SetWDA hook installed");
 
-    /* Retry clear for 3 seconds: handles apps that already had WDA set before
+    /* Start LL input hook thread immediately so KbdLL/MouseLL hooks are in the
+       LIFO chain before the target process installs its own hooks (e.g. InputTest
+       constructor runs before GetMessage, so we must be faster). */
+    g_llThread = CreateThread(NULL, 0, LLHookThread, NULL, 0, &g_llThreadId);
+    if (g_llThread) {
+        DbgLog("LLHookThread launched (early, before WDA loop)");
+        CloseHandle(g_llThread);
+    } else {
+        wsprintfA(buf, "LLHookThread CreateThread FAILED err=%u", GetLastError());
+        DbgLog(buf);
+    }
+
+    /* Retry WDA clear for 3 seconds: handles apps that already had WDA set before
        injection, and brief race windows. 50ms between cycles = ~60 attempts. */
     DWORD endTime = GetTickCount() + 3000;
     int cycles = 0;
@@ -191,16 +203,6 @@ static DWORD WINAPI SetupThread(LPVOID lp) {
 
     wsprintfA(buf, "Initial clear done (%d cycles). WDA hook remains active.", cycles);
     DbgLog(buf);
-
-    /* --- Start LL input hook thread --- */
-    g_llThread = CreateThread(NULL, 0, LLHookThread, NULL, 0, &g_llThreadId);
-    if (g_llThread) {
-        DbgLog("LLHookThread launched");
-        CloseHandle(g_llThread);
-    } else {
-        wsprintfA(buf, "LLHookThread CreateThread FAILED err=%u", GetLastError());
-        DbgLog(buf);
-    }
 
     return 0;
 }

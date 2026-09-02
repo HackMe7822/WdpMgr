@@ -854,8 +854,12 @@ namespace WdpHook
                 if (procs != lastProcs && lastProcs != 0)
                 {
                     lastProcs = procs;
+                    // Immediate rehook: new process already installed its hooks within the 150ms poll
+                    // window, so re-register now to be FIRST in LIFO chain right away.
+                    PostThreadMessage(_mainTid, WM_REHOOK, IntPtr.Zero, IntPtr.Zero);
                     Thread.Sleep(600);
-                    lock (_triedPids) { _triedPids.Clear(); } // new process arrived — retry DirectInject scan
+                    lock (_triedPids) { _triedPids.Clear(); } // retry DirectInject scan
+                    // Second rehook after 600ms catches any slow-starting hooks (heavy LDBs).
                     PostThreadMessage(_mainTid, WM_REHOOK, IntPtr.Zero, IntPtr.Zero);
                 }
                 else if (lastProcs == 0) lastProcs = procs;
